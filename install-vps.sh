@@ -44,6 +44,20 @@ valid_secret() {
     [ "${#value}" -ge 16 ]
 }
 
+env_file_needs_cleanup() {
+    [ -f .env.vps ] || return 0
+
+    grep -Eq '^DOMAIN=(|reg\.example\.com)$' .env.vps && return 0
+    grep -Eq '^WEB_ADMIN_PASSWORD=(|replace-with-)' .env.vps && return 0
+    grep -Eq '^EMAIL_WEBHOOK_SECRET=(|replace-with-)' .env.vps && return 0
+
+    for key in DOMAIN WEB_ADMIN_USER WEB_ADMIN_PASSWORD EMAIL_WEBHOOK_SECRET; do
+        [ "$(grep -c "^${key}=" .env.vps || true)" -eq 1 ] || return 0
+    done
+
+    return 1
+}
+
 if [ "$(id -u)" -ne 0 ]; then
     die "请使用 root 运行，推荐：curl ... | sudo sh"
 fi
@@ -86,6 +100,10 @@ domain="${DOMAIN:-$(env_value DOMAIN)}"
 admin_user="${WEB_ADMIN_USER:-$(env_value WEB_ADMIN_USER)}"
 admin_password="${WEB_ADMIN_PASSWORD:-$(env_value WEB_ADMIN_PASSWORD)}"
 webhook_secret="${EMAIL_WEBHOOK_SECRET:-$(env_value EMAIL_WEBHOOK_SECRET)}"
+
+if env_file_needs_cleanup; then
+    rewrite_env=1
+fi
 
 if ! valid_domain "$domain"; then
     rewrite_env=1
@@ -132,7 +150,7 @@ if [ "$rewrite_env" -eq 1 ]; then
 
     if [ -f .env.vps ]; then
         cp .env.vps .env.vps.bak
-        log "检测到示例值或不完整配置，原文件已备份为 .env.vps.bak"
+        log "检测到重复、示例值或不完整配置，原文件已备份为 .env.vps.bak"
     fi
 
     umask 077

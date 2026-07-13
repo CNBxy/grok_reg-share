@@ -69,7 +69,7 @@ Ubuntu / Debian 一键安装（自动安装 Docker、生成强密钥并启动服
 curl -fsSL https://raw.githubusercontent.com/sosoveooo-bit/grok_reg-share/main/install-vps.sh | sudo sh
 ```
 
-运行前先把域名 A/AAAA 记录指向 VPS。脚本会询问域名，并在完成后显示随机生成的管理密码和 Webhook 密钥，请立即安全保存。
+运行前先把域名 A/AAAA 记录指向 VPS。脚本会询问域名，并在完成后显示随机生成的管理密码和 Webhook 密钥，请立即安全保存。重复执行时会保留有效配置；如果 `.env.vps` 仍是示例值，会自动备份并修复。
 
 手动部署或更新已有项目：
 

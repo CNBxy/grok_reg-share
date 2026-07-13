@@ -18,6 +18,32 @@ generate_secret() {
     openssl rand -hex 24
 }
 
+env_value() {
+    key="$1"
+    [ -f .env.vps ] || return 0
+    sed -n "s/^${key}=//p" .env.vps | tail -n 1
+}
+
+valid_domain() {
+    value="$1"
+    case "$value" in
+        ''|reg.example.com|http://*|https://*|*/*|*:*|*' '*)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+valid_secret() {
+    value="$1"
+    case "$value" in
+        ''|replace-with-*)
+            return 1
+            ;;
+    esac
+    [ "${#value}" -ge 16 ]
+}
+
 if [ "$(id -u)" -ne 0 ]; then
     die "请使用 root 运行，推荐：curl ... | sudo sh"
 fi
@@ -55,28 +81,59 @@ fi
 cd "$INSTALL_DIR"
 
 generated_credentials=0
-if [ ! -f .env.vps ]; then
-    domain="${DOMAIN:-}"
+rewrite_env=0
+domain="${DOMAIN:-$(env_value DOMAIN)}"
+admin_user="${WEB_ADMIN_USER:-$(env_value WEB_ADMIN_USER)}"
+admin_password="${WEB_ADMIN_PASSWORD:-$(env_value WEB_ADMIN_PASSWORD)}"
+webhook_secret="${EMAIL_WEBHOOK_SECRET:-$(env_value EMAIL_WEBHOOK_SECRET)}"
+
+if ! valid_domain "$domain"; then
+    rewrite_env=1
+    domain=""
+    if [ -r /dev/tty ]; then
+        printf '请输入已指向此 VPS 的域名（不带 http/https）：' >/dev/tty
+        IFS= read -r domain </dev/tty
+    else
+        domain="${DOMAIN:-}"
+    fi
+
     if [ -z "$domain" ]; then
         if [ ! -r /dev/tty ]; then
             die "无法读取交互输入，请通过 DOMAIN=reg.example.com 传入域名"
         fi
-        printf '请输入已指向此 VPS 的域名（不带 http/https）：' >/dev/tty
-        IFS= read -r domain </dev/tty
     fi
 
-    case "$domain" in
-        ''|http://*|https://*|*/*|*:*|*' '*)
-            die "域名格式无效，请填写类似 reg.example.com 的纯域名"
-            ;;
-    esac
+    valid_domain "$domain" || die "域名格式无效，请填写类似 reg.example.com 的纯域名"
+fi
 
-    admin_user="${WEB_ADMIN_USER:-admin}"
-    admin_password="${WEB_ADMIN_PASSWORD:-$(generate_secret)}"
-    webhook_secret="${EMAIL_WEBHOOK_SECRET:-$(generate_secret)}"
+admin_user="${admin_user:-admin}"
+if ! valid_secret "$admin_password"; then
+    admin_password="$(generate_secret)"
+    generated_credentials=1
+    rewrite_env=1
+fi
+if ! valid_secret "$webhook_secret"; then
+    webhook_secret="$(generate_secret)"
+    generated_credentials=1
+    rewrite_env=1
+fi
 
-    [ "${#admin_password}" -ge 16 ] || die "WEB_ADMIN_PASSWORD 至少需要 16 位"
-    [ "${#webhook_secret}" -ge 16 ] || die "EMAIL_WEBHOOK_SECRET 至少需要 16 位"
+if [ ! -f .env.vps ]; then
+    rewrite_env=1
+fi
+
+if [ "$rewrite_env" -eq 1 ]; then
+    fallback="${OPENAI_CPA_CLOUDMAIL_FALLBACK:-$(env_value OPENAI_CPA_CLOUDMAIL_FALLBACK)}"
+    timezone="${TZ:-$(env_value TZ)}"
+    cloudmail_url="${CLOUDMAIL_URL:-$(env_value CLOUDMAIL_URL)}"
+    cloudmail_admin_email="${CLOUDMAIL_ADMIN_EMAIL:-$(env_value CLOUDMAIL_ADMIN_EMAIL)}"
+    cloudmail_password="${CLOUDMAIL_PASSWORD:-$(env_value CLOUDMAIL_PASSWORD)}"
+    grok2api_app_key="${GROK2API_APP_KEY:-$(env_value GROK2API_APP_KEY)}"
+
+    if [ -f .env.vps ]; then
+        cp .env.vps .env.vps.bak
+        log "检测到示例值或不完整配置，原文件已备份为 .env.vps.bak"
+    fi
 
     umask 077
     cat >.env.vps <<EOF
@@ -84,16 +141,15 @@ DOMAIN=$domain
 WEB_ADMIN_USER=$admin_user
 WEB_ADMIN_PASSWORD=$admin_password
 EMAIL_WEBHOOK_SECRET=$webhook_secret
-OPENAI_CPA_CLOUDMAIL_FALLBACK=false
-TZ=Asia/Shanghai
-CLOUDMAIL_URL=
-CLOUDMAIL_ADMIN_EMAIL=
-CLOUDMAIL_PASSWORD=
-GROK2API_APP_KEY=
+OPENAI_CPA_CLOUDMAIL_FALLBACK=${fallback:-false}
+TZ=${timezone:-Asia/Shanghai}
+CLOUDMAIL_URL=$cloudmail_url
+CLOUDMAIL_ADMIN_EMAIL=$cloudmail_admin_email
+CLOUDMAIL_PASSWORD=$cloudmail_password
+GROK2API_APP_KEY=$grok2api_app_key
 EOF
-    generated_credentials=1
 else
-    log "保留现有 .env.vps 配置"
+    log "现有 .env.vps 配置完整，继续使用"
 fi
 
 log "构建并启动服务"

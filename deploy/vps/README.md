@@ -20,7 +20,7 @@
 curl -fsSL https://raw.githubusercontent.com/sosoveooo-bit/grok_reg-share/main/install-vps.sh | sudo sh
 ```
 
-脚本会安装 Docker、询问域名、生成管理密码和 Webhook 密钥，并自动完成下面的 Compose 部署。运行前必须先把域名 A/AAAA 记录指向 VPS。
+脚本会安装 Docker、询问域名、生成管理密码和 Webhook 密钥，并自动完成下面的 Compose 部署。运行前必须先把域名 A/AAAA 记录指向 VPS。已有 `.env.vps` 如果仍含示例值，会先备份为 `.env.vps.bak` 再自动修复。
 
 手动上传项目时，在项目根目录执行：
 

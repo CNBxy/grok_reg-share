@@ -3,10 +3,15 @@
   "//_paths": "相对路径相对 grok_reg 目录；CPA 相关绝对路径更清晰。",
 
   "// ===== 邮箱：注册验证码来源 =====": "",
-  "// email_provider": "cloudmail | cloudflare | duckmail | yyds。推荐自建 cloudmail。",
+  "// email_provider": "openai_cpa | cloudmail | cloudflare | duckmail | yyds。openai_cpa 为 Webhook 内存池模式。",
   "email_provider": "cloudmail",
   "// defaultDomains": "注册用邮箱域名，逗号分隔；cloudmail catch-all 域名写这里。",
   "defaultDomains": "example.com",
+
+  "// openai_cpa_webhook_secret": "OpenAI-CPA 邮件 Worker 通信密钥，对应 EMAIL_WEBHOOK_SECRET；接收路径 /api/webhook/email",
+  "openai_cpa_webhook_secret": "",
+  "// openai_cpa_cloudmail_fallback": "本地没有公网 Webhook 时，复用下方 CloudMail 配置查询验证码",
+  "openai_cpa_cloudmail_fallback": true,
 
   "// cloudmail_url": "CloudMail 管理端根 URL，如 https://mail.example.com",
   "cloudmail_url": "",
@@ -138,5 +143,7 @@
   "// cpa_mint_browser_reuse": "mint worker 复用 Chromium（清会话）而非每号 cold start",
   "cpa_mint_browser_reuse": true,
   "// cpa_mint_browser_recycle_every": "mint 浏览器每成功 N 次后完整重启；0=仅出错时重启",
-  "cpa_mint_browser_recycle_every": 15
+  "cpa_mint_browser_recycle_every": 15,
+  "// cpa_mint_browser_retries": "Chromium/页面连接断开时的重建重试次数；不重试密码错误或 Cloudflare 拦截",
+  "cpa_mint_browser_retries": 2
 }

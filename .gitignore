@@ -10,6 +10,7 @@ config.json
 config.local.json
 config.json.bak*
 .env
+.env.vps
 accounts_*.txt
 emails_used.txt
 mail_credentials.txt

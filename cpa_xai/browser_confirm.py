@@ -1251,12 +1251,16 @@ def mint_with_browser(
         def _poll() -> None:
             try:
                 time.sleep(2)
+
+                def _poll_cancel() -> bool:
+                    return stop_event.is_set() or bool(cancel and cancel())
+
                 tr = poll_device_token(
                     sess.device_code,
                     interval=max(sess.interval, 5),
                     expires_in=min(sess.expires_in, int(browser_timeout_sec) + 60),
                     log=log,
-                    cancel=cancel,
+                    cancel=_poll_cancel,
                     proxy=resolved or None,
                 )
                 token_box["token"] = tr
@@ -1269,35 +1273,43 @@ def mint_with_browser(
         t = threading.Thread(target=_poll, name="oauth-poll", daemon=True)
         t.start()
         try:
-            approve_device_code(
-                work_page,
-                verification_uri_complete=sess.verification_uri_complete,
-                email=email,
-                password=password,
-                user_code=sess.user_code,
-                timeout_sec=browser_timeout_sec,
-                stop_event=stop_event,
-                log=log,
-            )
-        except BrowserConfirmError as e:
-            msg = str(e)
-            # Non-retryable auth failures: abort mint immediately (backfill will skip)
-            low = msg.lower()
-            hard = (
-                "auth failed" in low
-                or "turnstile" in low
-                or "cloudflare" in low
-                or "blocked" in low
-                or "access denied" in low
-                or "错误的邮箱" in msg
-                or "password" in low
-                or "browser confirm timeout" in low
-            )
-            if hard:
-                log(f"browser confirm abort: {e}")
+            try:
+                approve_device_code(
+                    work_page,
+                    verification_uri_complete=sess.verification_uri_complete,
+                    email=email,
+                    password=password,
+                    user_code=sess.user_code,
+                    timeout_sec=browser_timeout_sec,
+                    stop_event=stop_event,
+                    log=log,
+                )
+            except BrowserConfirmError as e:
+                msg = str(e)
+                # Non-retryable auth failures: abort mint immediately (backfill will skip)
+                low = msg.lower()
+                hard = (
+                    "auth failed" in low
+                    or "turnstile" in low
+                    or "cloudflare" in low
+                    or "blocked" in low
+                    or "access denied" in low
+                    or "错误的邮箱" in msg
+                    or "password" in low
+                    or "browser confirm timeout" in low
+                )
+                if hard:
+                    log(f"browser confirm abort: {e}")
+                    stop_event.set()
+                    raise
+                log(f"browser confirm warning: {e}")
+            except BaseException:  # noqa: BLE001
+                # Ensure the OAuth polling thread stops when Chromium/Page dies.
                 stop_event.set()
                 raise
-            log(f"browser confirm warning: {e}")
+        finally:
+            if stop_event.is_set() and t.is_alive():
+                t.join(timeout=5)
 
         t.join(timeout=max(browser_timeout_sec, 60) + 30)
         if "token" in token_box:

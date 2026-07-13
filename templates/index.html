@@ -199,6 +199,10 @@ tr:last-child td{border-bottom:none}
       <div class="tab-content" id="tab-config">
         <div class="config-panel">
           <div class="config-grid" id="configGrid"></div>
+          <div id="openaiCpaHelp" style="display:none; margin:12px 0; padding:12px 14px; border:1px solid rgba(99,102,241,.35); border-radius:8px; background:rgba(99,102,241,.08); color:var(--muted); font-size:12px; line-height:1.7">
+            <strong style="color:#c7d2fe">OpenAI-CPA 内存池接收地址：</strong><code>/api/webhook/email</code><br>
+            本地没有公网入口时，开启“本地回退到 CloudMail”即可直接查询 CloudMail API，无需 VPS 或 Tunnel。部署到公网后仍会优先使用更快的 Webhook 内存池。Cloudflare Worker 的 <code>EMAIL_WEBHOOK_SECRET</code> 必须与通信密钥一致；反向代理只应公开 <code>/api/webhook/email</code>。
+          </div>
           
           <div class="custom-key-row">
             <span style="font-size:12px; font-weight:600; color:var(--muted)">新增自定义配置项：</span>
@@ -610,6 +614,7 @@ async function runMailTest() {
 const CONFIG_SECTIONS = {
   "邮箱验证码配置": [
     "email_provider", "defaultDomains",
+    "openai_cpa_webhook_secret", "openai_cpa_cloudmail_fallback",
     "cloudmail_url", "cloudmail_admin_email", "cloudmail_password",
     "cloudflare_api_base", "cloudflare_api_key", "cloudflare_auth_mode",
     "cloudflare_path_domains", "cloudflare_path_accounts", "cloudflare_path_token", "cloudflare_path_messages",
@@ -622,7 +627,7 @@ const CONFIG_SECTIONS = {
     "cpa_export_enabled", "cpa_auth_dir", "cpa_copy_to_hotload", "cpa_hotload_dir",
     "cpa_base_url", "cpa_headless", "cpa_force_standalone", "cpa_mint_workers",
     "cpa_mint_cookie_inject", "cpa_mint_browser_reuse", "cpa_mint_browser_recycle_every",
-    "cpa_mint_queue_max", "cpa_mint_required", "cpa_probe_after_write", "cpa_probe_chat",
+    "cpa_mint_browser_retries", "cpa_mint_queue_max", "cpa_mint_required", "cpa_probe_after_write", "cpa_probe_chat",
     "cpa_mint_timeout_sec"
   ],
   "注册流程参数": [
@@ -644,6 +649,8 @@ const CONFIG_SECTIONS = {
 const CONFIG_LABELS = {
   "email_provider": "邮箱服务商",
   "defaultDomains": "注册邮箱域名（逗号分隔）",
+  "openai_cpa_webhook_secret": "OpenAI-CPA 通信密钥 (EMAIL_WEBHOOK_SECRET)",
+  "openai_cpa_cloudmail_fallback": "本地无公网时回退到 CloudMail",
   "cloudmail_url": "CloudMail 管理端地址",
   "cloudmail_admin_email": "CloudMail 管理员邮箱",
   "cloudmail_password": "CloudMail 管理员密码",
@@ -672,6 +679,7 @@ const CONFIG_LABELS = {
   "cpa_mint_cookie_inject": "向确认流程注入 Cookie",
   "cpa_mint_browser_reuse": "复用浏览器进程",
   "cpa_mint_browser_recycle_every": "每 N 次后重启浏览器",
+  "cpa_mint_browser_retries": "浏览器断线重试次数",
   "cpa_mint_queue_max": "CPA 排队上限",
   "cpa_mint_required": "CPA 失败则整号算失败",
   "cpa_probe_after_write": "写出后探测 Grok 4.5",
@@ -709,6 +717,14 @@ const CONFIG_LABELS = {
 
 // 选择不同邮箱服务商时，仅展示相关字段
 const PROVIDER_FIELDS = {
+  "openai_cpa": [
+    "defaultDomains",
+    "openai_cpa_webhook_secret",
+    "openai_cpa_cloudmail_fallback",
+    "cloudmail_url",
+    "cloudmail_admin_email",
+    "cloudmail_password"
+  ],
   "cloudmail": [
     "defaultDomains",
     "cloudmail_url",
@@ -738,6 +754,7 @@ const PROVIDER_FIELDS = {
 
 const ALL_PROVIDER_KEYS = [
   "defaultDomains",
+  "openai_cpa_webhook_secret", "openai_cpa_cloudmail_fallback",
   "cloudmail_url", "cloudmail_admin_email", "cloudmail_password",
   "cloudflare_api_base", "cloudflare_api_key", "cloudflare_auth_mode",
   "cloudflare_path_domains", "cloudflare_path_accounts", "cloudflare_path_token", "cloudflare_path_messages",
@@ -767,7 +784,7 @@ function renderConfig(cfg) {
     const renderKeys = [];
     for (const k of keys) {
       if (k in cfg) renderKeys.push(k);
-      else if (k === 'email_provider' || ALL_PROVIDER_KEYS.includes(k) || k.startsWith('cloudmail_') || k.startsWith('cloudflare_') || k.startsWith('duckmail_') || k.startsWith('yyds_')) {
+      else if (k === 'email_provider' || ALL_PROVIDER_KEYS.includes(k) || k.startsWith('openai_cpa_') || k.startsWith('cloudmail_') || k.startsWith('cloudflare_') || k.startsWith('duckmail_') || k.startsWith('yyds_')) {
         if (!(k in cfg)) cfg[k] = (typeof currentConfig[k] !== 'undefined') ? currentConfig[k] : '';
         if (k in cfg) renderKeys.push(k);
       }
@@ -813,6 +830,8 @@ function toggleProviderFields(activeProvider) {
     const fieldDiv = document.querySelector(`.config-field[data-field-key="${k}"]`);
     if (fieldDiv) fieldDiv.style.display = 'flex';
   });
+  const openaiCpaHelp = document.getElementById('openaiCpaHelp');
+  if (openaiCpaHelp) openaiCpaHelp.style.display = activeProvider === 'openai_cpa' ? 'block' : 'none';
 }
 
 function createFieldMarkup(key, val, container) {
@@ -828,6 +847,7 @@ function createFieldMarkup(key, val, container) {
     div.innerHTML = `
       <label>${labelText}</label>
       <select data-key="${key}">
+        <option value="openai_cpa" ${v === 'openai_cpa' ? 'selected' : ''}>OpenAI-CPA 内存池</option>
         <option value="cloudmail" ${v === 'cloudmail' ? 'selected' : ''}>CloudMail 自建邮箱</option>
         <option value="cloudflare" ${v === 'cloudflare' ? 'selected' : ''}>Cloudflare Worker 临时邮箱</option>
         <option value="duckmail" ${v === 'duckmail' ? 'selected' : ''}>DuckMail</option>
@@ -858,7 +878,7 @@ function createFieldMarkup(key, val, container) {
       <input data-key="${key}" data-type="number" type="number" step="any" value="${escHtml(String(safeVal))}" />
     `;
   } else {
-    const isSecret = /password|api_key|jwt|app_key/i.test(key);
+    const isSecret = /password|api_key|jwt|app_key|secret/i.test(key);
     div.innerHTML = `
       <label>${labelText}</label>
       <input data-key="${key}" data-type="string" ${isSecret ? 'type="password"' : 'type="text"'} value="${escHtml(String(safeVal))}" placeholder="${isSecret ? '请输入密钥' : ''}" />

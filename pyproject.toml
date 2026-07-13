@@ -7,6 +7,7 @@ dependencies = [
     "DrissionPage>=4.1",   # Chrome 自动化（含 turnstilePatch 扩展加载）
     "curl_cffi>=0.7",      # HTTP client（带 TLS 指纹），邮箱 API + grok2api 调用
     "flask>=3.1.3",
+    "waitress>=3.0",       # 单进程多线程生产 WSGI，保证内存验证码池一致
 ]
 
 # application 模式：不构建 wheel，uv 只管依赖

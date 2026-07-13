@@ -1,8 +1,10 @@
 """Web UI for grok_reg - Flask backend with SSE log streaming."""
 from __future__ import annotations
-import json, os, queue, sys, threading, time, traceback, pathlib
+import hmac, ipaddress, json, os, queue, sys, threading, time, traceback, pathlib
 from pathlib import Path
 from flask import Flask, Response, jsonify, render_template, request
+from urllib.parse import urlsplit
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = BASE_DIR / "config.json"
@@ -12,6 +14,72 @@ CPA_DIR = BASE_DIR / "cpa_auths"
 sys.path.insert(0, str(BASE_DIR))
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+if str(os.environ.get("TRUST_PROXY_HEADERS", "")).strip().lower() in {"1", "true", "yes", "on"}:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+_PUBLIC_PATHS = {"/healthz", "/api/webhook/email"}
+
+
+def _is_loopback_request():
+    try:
+        return ipaddress.ip_address(str(request.remote_addr or "")).is_loopback
+    except ValueError:
+        return False
+
+
+def _admin_auth_response(status=401, message="需要管理面身份验证"):
+    response = Response(message, status=status, content_type="text/plain; charset=utf-8")
+    if status == 401:
+        response.headers["WWW-Authenticate"] = 'Basic realm="Grok Registrar", charset="UTF-8"'
+    return response
+
+
+@app.before_request
+def enforce_admin_auth():
+    if request.path in _PUBLIC_PATHS:
+        return None
+
+    admin_password = str(os.environ.get("WEB_ADMIN_PASSWORD") or "")
+    if not admin_password:
+        if _is_loopback_request():
+            return None
+        return _admin_auth_response(
+            status=503,
+            message="公网管理面未启用：请配置 WEB_ADMIN_PASSWORD",
+        )
+
+    admin_user = str(os.environ.get("WEB_ADMIN_USER") or "admin")
+    auth = request.authorization
+    valid_user = bool(auth) and hmac.compare_digest(str(auth.username or ""), admin_user)
+    valid_password = bool(auth) and hmac.compare_digest(str(auth.password or ""), admin_password)
+    if not (valid_user and valid_password):
+        return _admin_auth_response()
+
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = str(request.headers.get("Origin") or "").strip()
+        if origin:
+            origin_host = urlsplit(origin).netloc.lower()
+            if origin_host != str(request.host or "").lower():
+                return jsonify(dict(ok=False, error="跨站请求已拒绝")), 403
+    return None
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    if request.path.startswith("/api/config") or request.path.startswith("/api/accounts"):
+        response.headers["Cache-Control"] = "no-store"
+    if request.is_secure:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 # --------------- SSE log bus ---------------
 _log_listeners: list[queue.Queue] = []
@@ -276,6 +344,11 @@ def _run_registration(extra: int, threads: int):
 
 # --------------- routes ---------------
 
+@app.route("/healthz")
+def healthz():
+    return jsonify(dict(ok=True, service="grok-registrar"))
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -371,6 +444,23 @@ def api_cpa_mint_single():
     return jsonify(dict(ok=True))
 
 # Test email connection
+@app.route("/api/webhook/email", methods=["POST"])
+def api_openai_cpa_email_webhook():
+    if request.content_length and request.content_length > 2 * 1024 * 1024 + 4096:
+        return jsonify(dict(ok=False, error="邮件请求体超过 2MB 限制")), 413
+    try:
+        import grok_register_ttk as reg
+        reg.load_config()
+        payload = request.get_json(silent=True)
+        status_code, result = reg.accept_openai_cpa_webhook(
+            payload,
+            request.headers.get("X-Webhook-Secret", ""),
+        )
+        return jsonify(result), status_code
+    except Exception:
+        return jsonify(dict(ok=False, error="邮件 Webhook 处理失败")), 500
+
+
 @app.route("/api/test/mail", methods=["POST"])
 def api_test_mail():
     try:
@@ -380,6 +470,35 @@ def api_test_mail():
         provider = (cfg.get("email_provider") or "cloudmail").strip().lower()
 
         t0 = time.time()
+        if provider == "openai_cpa":
+            secret = reg.get_openai_cpa_webhook_secret()
+            fallback_enabled = reg.openai_cpa_cloudmail_fallback_enabled()
+            fallback_available = reg.openai_cpa_cloudmail_fallback_available()
+            domains = [item.strip() for item in str(cfg.get("defaultDomains") or "").replace("，", ",").split(",") if item.strip()]
+            if not domains:
+                return jsonify(dict(ok=False, error="未配置注册邮箱域名 (defaultDomains)")), 400
+            if not secret and not fallback_available:
+                if fallback_enabled:
+                    error = "CloudMail 本地回退已开启，但 URL、管理员邮箱或密码不完整"
+                else:
+                    error = "未配置 OpenAI-CPA 通信密钥，也未开启 CloudMail 本地回退"
+                return jsonify(dict(ok=False, error=error)), 400
+            sources = []
+            if secret:
+                sources.append("Webhook 内存池")
+            if fallback_available:
+                reg._cloudmail_get_shared_token()
+                sources.append("CloudMail 本地回退")
+            stats = reg.openai_cpa_memory_pool_stats()
+            elapsed = round(time.time() - t0, 2)
+            return jsonify(dict(
+                ok=True,
+                provider=provider,
+                token=f"可用通道: {' + '.join(sources)}",
+                elapsed=elapsed,
+                note=f"内存池待取码: {stats['pending']}；Webhook 路径: /api/webhook/email",
+            ))
+
         if provider == "cloudmail":
             url = reg.get_cloudmail_url()
             admin = reg.get_cloudmail_admin_email()
@@ -450,5 +569,7 @@ def api_logs_stream():
     return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 if __name__ == "__main__":
-    print("[*] Grok Register Web UI: http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False, threaded=True)
+    web_host = str(os.environ.get("WEB_HOST") or "127.0.0.1").strip()
+    web_port = int(os.environ.get("WEB_PORT") or 5000)
+    print(f"[*] Grok Register Web UI: http://{web_host}:{web_port}")
+    app.run(host=web_host, port=web_port, debug=False, use_reloader=False, threaded=True)

@@ -119,6 +119,7 @@ def export_cpa_xai_for_account(
     cookie_inject = bool(cfg.get("cpa_mint_cookie_inject", True))
     reuse_browser = bool(cfg.get("cpa_mint_browser_reuse", True))
     recycle_every = int(cfg.get("cpa_mint_browser_recycle_every", 15) or 0)
+    browser_retries = int(cfg.get("cpa_mint_browser_retries", 2) or 0)
 
     # cookies: explicit arg > page export > none
     use_cookies = cookies
@@ -173,6 +174,7 @@ def export_cpa_xai_for_account(
         cookies=use_cookies,
         reuse_browser=reuse_browser,
         recycle_every=recycle_every,
+        browser_retries=browser_retries,
         log=_log,
     )
 

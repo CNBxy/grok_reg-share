@@ -14,11 +14,15 @@ import os
 import sys
 import queue
 import secrets
+import hmac
 import struct
 import random
 import re
 import string
 import json
+from email import policy
+from email.header import decode_header, make_header
+from email.parser import Parser
 
 from DrissionPage import Chromium, ChromiumOptions
 from DrissionPage.errors import PageDisconnectedError
@@ -52,6 +56,9 @@ DEFAULT_CONFIG = {
     "cloudmail_url": "",
     "cloudmail_admin_email": "",
     "cloudmail_password": "",
+    "openai_cpa_webhook_secret": "",
+    "openai_cpa_cloudmail_fallback": True,
+    "cpa_mint_browser_retries": 2,
 }
 
 config = DEFAULT_CONFIG.copy()
@@ -59,6 +66,10 @@ _cf_domain_index = 0
 # CloudMail 公开 token 单例（多线程共享，避免并发覆盖）
 _cloudmail_public_token = None
 _cloudmail_public_token_lock = threading.Lock()
+_openai_cpa_code_pool = {}
+_openai_cpa_code_pool_lock = threading.Lock()
+_OPENAI_CPA_POOL_TTL_SECONDS = 300
+_OPENAI_CPA_POOL_MAX_ENTRIES = 1000
 
 
 
@@ -1146,6 +1157,51 @@ def _cloudmail_get_shared_token(force_refresh=False):
         return token
 
 
+def _cloudmail_extract_code_from_messages(messages, seen_attempts, log_callback=None):
+    if log_callback:
+        log_callback(f"[Debug] CloudMail 本轮邮件数量: {len(messages)}")
+    for msg in messages:
+        msg_id = msg.get("emailId") or msg.get("id") or msg.get("messageId")
+        if not msg_id:
+            continue
+        attempt = int(seen_attempts.get(msg_id, 0))
+        if attempt >= 5:
+            continue
+        seen_attempts[msg_id] = attempt + 1
+        parts = []
+        for field in ("content", "text", "textContent", "text_content", "body", "snippet", "intro"):
+            value = msg.get(field)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+        html_val = msg.get("html") or msg.get("htmlContent") or msg.get("html_content")
+        if isinstance(html_val, str):
+            parts.append(re.sub(r"<[^>]+>", " ", html_val))
+        elif isinstance(html_val, list):
+            for html_part in html_val:
+                if isinstance(html_part, str):
+                    parts.append(re.sub(r"<[^>]+>", " ", html_part))
+        subject = str(msg.get("subject", "") or "")
+        combined = "\n".join(parts)
+        if log_callback:
+            log_callback(f"[Debug] CloudMail 收到邮件: {subject}")
+        code = extract_verification_code(combined, subject)
+        if code:
+            return code
+        if log_callback:
+            log_callback(f"[Debug] 邮件已解析但未提取到验证码 id={msg_id} attempt={seen_attempts[msg_id]}")
+    return None
+
+
+def _cloudmail_poll_code_once(email, public_token, seen_attempts, log_callback=None):
+    messages = cloudmail_public_email_list(
+        get_cloudmail_url(),
+        public_token,
+        to_email=email,
+        size=20,
+    )
+    return _cloudmail_extract_code_from_messages(messages, seen_attempts, log_callback)
+
+
 def cloudmail_get_oai_code(
     dev_token,
     email,
@@ -1186,7 +1242,7 @@ def cloudmail_get_oai_code(
         current_interval = poll_interval
         # 用完整邮箱地址查询（公开 API 的 toEmail 需要完整地址）
         try:
-            messages = cloudmail_public_email_list(url, public_token, to_email=email, size=20)
+            code = _cloudmail_poll_code_once(email, public_token, seen_attempts, log_callback)
         except Exception as exc:
             err_msg = str(exc)
             if log_callback:
@@ -1201,42 +1257,217 @@ def cloudmail_get_oai_code(
                     pass
             sleep_with_cancel(current_interval, cancel_callback)
             continue
-        if log_callback:
-            log_callback(f"[Debug] CloudMail 本轮邮件数量: {len(messages)}")
-        for msg in messages:
-            msg_id = msg.get("emailId") or msg.get("id") or msg.get("messageId")
-            if not msg_id:
-                continue
-            attempt = int(seen_attempts.get(msg_id, 0))
-            if attempt >= 5:
-                continue
-            seen_attempts[msg_id] = attempt + 1
-            # 提取邮件内容（公开接口返回 content 字段，为完整 HTML）
-            parts = []
-            for field in ("content", "text", "textContent", "text_content", "body", "snippet", "intro"):
-                value = msg.get(field)
-                if isinstance(value, str) and value.strip():
-                    parts.append(value)
-            html_val = msg.get("html") or msg.get("htmlContent") or msg.get("html_content")
-            if isinstance(html_val, str):
-                parts.append(re.sub(r"<[^>]+>", " ", html_val))
-            elif isinstance(html_val, list):
-                for h in html_val:
-                    if isinstance(h, str):
-                        parts.append(re.sub(r"<[^>]+>", " ", h))
-            subject = str(msg.get("subject", "") or "")
-            combined = "\n".join(parts)
+        if code:
             if log_callback:
-                log_callback(f"[Debug] CloudMail 收到邮件: {subject}")
-            code = extract_verification_code(combined, subject)
-            if code:
-                if log_callback:
-                    log_callback(f"[*] CloudMail 从邮件中提取到验证码: {code}")
-                return code
-            elif log_callback:
-                log_callback(f"[Debug] 邮件已解析但未提取到验证码 id={msg_id} attempt={seen_attempts[msg_id]}")
+                log_callback(f"[*] CloudMail 从邮件中提取到验证码: {code}")
+            return code
         sleep_with_cancel(current_interval, cancel_callback)
     raise Exception(f"CloudMail 在 {timeout}s 内未收到验证码邮件")
+
+
+# ──────────────────────── OpenAI-CPA 内存池邮箱 ────────────────────────
+
+def get_openai_cpa_webhook_secret():
+    return str(
+        os.environ.get("EMAIL_WEBHOOK_SECRET")
+        or config.get("openai_cpa_webhook_secret", "")
+        or ""
+    ).strip()
+
+
+def openai_cpa_cloudmail_fallback_enabled():
+    raw = os.environ.get("OPENAI_CPA_CLOUDMAIL_FALLBACK")
+    if raw is None:
+        raw = config.get("openai_cpa_cloudmail_fallback", True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def openai_cpa_cloudmail_fallback_available():
+    return openai_cpa_cloudmail_fallback_enabled() and all(
+        (get_cloudmail_url(), get_cloudmail_admin_email(), get_cloudmail_password())
+    )
+
+
+def _prune_openai_cpa_code_pool_locked(now=None):
+    now = time.time() if now is None else float(now)
+    stale_keys = [
+        email
+        for email, entry in _openai_cpa_code_pool.items()
+        if now - float(entry.get("received_at", 0) or 0) > _OPENAI_CPA_POOL_TTL_SECONDS
+    ]
+    for email in stale_keys:
+        _openai_cpa_code_pool.pop(email, None)
+
+    overflow = len(_openai_cpa_code_pool) - _OPENAI_CPA_POOL_MAX_ENTRIES
+    if overflow > 0:
+        oldest = sorted(
+            _openai_cpa_code_pool.items(),
+            key=lambda item: float(item[1].get("received_at", 0) or 0),
+        )[:overflow]
+        for email, _ in oldest:
+            _openai_cpa_code_pool.pop(email, None)
+
+
+def openai_cpa_memory_pool_stats():
+    with _openai_cpa_code_pool_lock:
+        _prune_openai_cpa_code_pool_locked()
+        return {"pending": len(_openai_cpa_code_pool), "ttl_seconds": _OPENAI_CPA_POOL_TTL_SECONDS}
+
+
+def _decode_webhook_raw_email(raw_content):
+    subject = ""
+    body_parts = []
+    try:
+        message = Parser(policy=policy.default).parsestr(raw_content)
+        raw_subject = str(message.get("Subject", "") or "")
+        if raw_subject:
+            subject = str(make_header(decode_header(raw_subject)))
+
+        parts = message.walk() if message.is_multipart() else [message]
+        for part in parts:
+            content_type = str(part.get_content_type() or "").lower()
+            disposition = str(part.get_content_disposition() or "").lower()
+            if content_type not in {"text/plain", "text/html"} or disposition == "attachment":
+                continue
+            try:
+                text = part.get_content()
+            except Exception:
+                payload = part.get_payload(decode=True)
+                if isinstance(payload, bytes):
+                    text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                else:
+                    text = str(payload or "")
+            if content_type == "text/html":
+                text = re.sub(r"<[^>]+>", " ", str(text))
+            if str(text).strip():
+                body_parts.append(str(text))
+    except Exception:
+        pass
+    return subject, "\n".join(body_parts) or raw_content
+
+
+def accept_openai_cpa_webhook(payload, provided_secret):
+    """校验 Worker 推送并将验证码短暂写入内存池。"""
+    expected_secret = get_openai_cpa_webhook_secret()
+    if not expected_secret:
+        return 503, {"ok": False, "error": "OpenAI-CPA Webhook 密钥未配置"}
+    if not hmac.compare_digest(str(provided_secret or ""), expected_secret):
+        return 401, {"ok": False, "error": "Webhook 密钥无效"}
+    if not isinstance(payload, dict):
+        return 400, {"ok": False, "error": "请求体必须是 JSON 对象"}
+
+    to_addr = str(payload.get("to_addr") or "").strip().lower()
+    raw_content = payload.get("raw_content")
+    message_id = str(payload.get("message_id") or "")[:512]
+    if len(to_addr) > 320 or not re.fullmatch(r"[^@\s]{1,64}@[^@\s]{1,255}", to_addr):
+        return 400, {"ok": False, "error": "收件邮箱格式无效"}
+    if not isinstance(raw_content, str) or not raw_content:
+        return 400, {"ok": False, "error": "raw_content 不能为空"}
+    if len(raw_content.encode("utf-8", errors="ignore")) > 2 * 1024 * 1024:
+        return 413, {"ok": False, "error": "邮件内容超过 2MB 限制"}
+
+    subject, decoded_text = _decode_webhook_raw_email(raw_content)
+    code = extract_verification_code(decoded_text, subject)
+    if not code:
+        return 202, {"ok": True, "stored": False, "reason": "邮件中未识别到验证码"}
+
+    with _openai_cpa_code_pool_lock:
+        _prune_openai_cpa_code_pool_locked()
+        _openai_cpa_code_pool[to_addr] = {
+            "code": code,
+            "message_id": message_id,
+            "received_at": time.time(),
+        }
+    return 200, {"ok": True, "stored": True}
+
+
+def openai_cpa_get_oai_code(
+    dev_token,
+    email,
+    timeout=300,
+    poll_interval=0.3,
+    log_callback=None,
+    cancel_callback=None,
+    resend_callback=None,
+):
+    target_email = str(email or "").strip().lower()
+    memory_enabled = bool(get_openai_cpa_webhook_secret())
+    fallback_enabled = openai_cpa_cloudmail_fallback_enabled()
+    fallback_available = openai_cpa_cloudmail_fallback_available()
+    if not memory_enabled and not fallback_available:
+        if fallback_enabled:
+            raise Exception("OpenAI-CPA 本地回退已开启，但 CloudMail URL、管理员邮箱或密码不完整")
+        raise Exception("OpenAI-CPA 未配置 Webhook 通信密钥，也未开启可用的 CloudMail 本地回退")
+
+    deadline = time.time() + timeout
+    next_resend_at = time.time() + 60
+    interval = max(0.1, min(float(poll_interval or 0.3), 1.0))
+    public_token = None
+    seen_attempts = {}
+    if fallback_available:
+        try:
+            public_token = _cloudmail_get_shared_token()
+        except Exception as exc:
+            if not memory_enabled:
+                raise Exception(f"OpenAI-CPA CloudMail 本地回退初始化失败: {exc}")
+            if log_callback:
+                log_callback(f"[Debug] CloudMail 本地回退暂不可用，将继续等待内存池: {exc}")
+    if log_callback:
+        sources = []
+        if memory_enabled:
+            sources.append("Webhook 内存池")
+        if public_token:
+            sources.append("CloudMail API 回退")
+        log_callback(f"[Debug] OpenAI-CPA 等待验证码 ({' + '.join(sources)}): {target_email}")
+
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        if memory_enabled:
+            with _openai_cpa_code_pool_lock:
+                _prune_openai_cpa_code_pool_locked()
+                entry = _openai_cpa_code_pool.pop(target_email, None)
+            if entry and entry.get("code"):
+                code = str(entry["code"]).strip()
+                if log_callback:
+                    log_callback(f"[*] OpenAI-CPA 内存池提取到验证码: {code}")
+                return code
+
+        if public_token:
+            try:
+                code = _cloudmail_poll_code_once(
+                    target_email,
+                    public_token,
+                    seen_attempts,
+                    log_callback,
+                )
+                if code:
+                    if log_callback:
+                        log_callback(f"[*] OpenAI-CPA 通过 CloudMail 本地回退提取到验证码: {code}")
+                    return code
+            except Exception as exc:
+                err_msg = str(exc)
+                if log_callback:
+                    log_callback(f"[Debug] OpenAI-CPA CloudMail 回退查询失败: {err_msg}")
+                if "token" in err_msg.lower() or "401" in err_msg:
+                    try:
+                        public_token = _cloudmail_get_shared_token(force_refresh=True)
+                    except Exception:
+                        pass
+
+        if resend_callback and time.time() >= next_resend_at:
+            try:
+                resend_callback()
+                if log_callback:
+                    log_callback("[*] 已触发重新发送验证码")
+            except Exception as exc:
+                if log_callback:
+                    log_callback(f"[Debug] 触发重发验证码失败: {exc}")
+            next_resend_at = time.time() + 60
+        sleep_with_cancel(interval, cancel_callback)
+
+    raise Exception(f"OpenAI-CPA 在 {timeout}s 内未从内存池或 CloudMail 回退收到验证码")
 
 
 # ──────────────────────── 公共邮箱工具 ────────────────────────
@@ -1249,21 +1480,24 @@ def get_email_and_token(api_key=None):
     provider = get_email_provider()
     if provider == "yyds":
         return yyds_get_email_and_token(api_key=api_key, jwt=get_yyds_jwt())
-    if provider == "cloudmail":
-        # CloudMail catch-all 模式：直接生成随机邮箱，无需注册
+    if provider in {"cloudmail", "openai_cpa"}:
+        # Catch-all 模式：直接生成随机邮箱，无需调用邮箱创建接口
         # Cloudflare Email Routing 会自动将所有该域名的邮件路由到 Worker
+        if provider == "openai_cpa" and not (
+            get_openai_cpa_webhook_secret() or openai_cpa_cloudmail_fallback_available()
+        ):
+            raise Exception("OpenAI-CPA 需要配置 Webhook 通信密钥，或开启并完整配置 CloudMail 本地回退")
         # 支持英文逗号、中文逗号、空格分隔
         raw = str(config.get("defaultDomains", "") or "")
         domains = [x.strip() for x in re.split(r"[,，\s]+", raw) if x.strip()]
         if not domains:
-            raise Exception("CloudMail 需要在 defaultDomains 中配置可用域名")
+            raise Exception(f"{provider} 需要在 defaultDomains 中配置可用域名")
         global _cf_domain_index
         domain = domains[_cf_domain_index % len(domains)]
         _cf_domain_index += 1
         username = generate_username(10)
         address = f"{username}@{domain}"
-        # 返回占位 token（实际不用于邮件查询，邮件查询走公开 API）
-        return address, "cloudmail_catch_all"
+        return address, f"{provider}_catch_all"
     if provider == "cloudflare":
         api_base = get_cloudflare_api_base()
         if not api_base:
@@ -1324,6 +1558,16 @@ def get_oai_code(
             jwt=get_yyds_jwt(),
             cancel_callback=cancel_callback,
         )
+    if provider == "openai_cpa":
+        return openai_cpa_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+            resend_callback=resend_callback,
+        )
     if provider == "cloudmail":
         return cloudmail_get_oai_code(
             dev_token,
@@ -1360,6 +1604,9 @@ def extract_verification_code(text, subject=""):
         if match:
             return match.group(1)
     match = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?<![\d#])(\d{6})(?!\d)", f"{subject}\n{text}")
     if match:
         return match.group(1)
     patterns = [

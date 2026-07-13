@@ -59,6 +59,30 @@ uv sync
 uv run python -c "from DrissionPage import Chromium; print('OK')"
 ```
 
+### VPS + Docker Compose（推荐）
+
+公网部署请使用项目内置的 Caddy HTTPS、管理面认证和 Xvfb Chromium 配置：
+
+Ubuntu / Debian 一键安装（自动安装 Docker、生成强密钥并启动服务）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sosoveooo-bit/grok_reg-share/main/install-vps.sh | sudo sh
+```
+
+运行前先把域名 A/AAAA 记录指向 VPS。脚本会询问域名，并在完成后显示随机生成的管理密码和 Webhook 密钥，请立即安全保存。
+
+手动部署或更新已有项目：
+
+```bash
+bash deploy/vps/deploy.sh
+```
+
+第一次运行会生成 `.env.vps`，填写域名、管理面强密码和邮件 Webhook 密钥后再次执行。完整说明见 [`deploy/vps/README.md`](deploy/vps/README.md)。VPS 防火墙不要开放 5000 端口，只开放 80/443；管理页面使用 Basic Auth，`/api/webhook/email` 使用独立的 `X-Webhook-Secret`。
+
+### 本地 OpenAI-CPA 收件
+
+本地没有公网入口时，在配置管理中选择 `OpenAI-CPA 内存池` 并开启“本地无公网时回退到 CloudMail”。程序会优先读取 Webhook 内存池，未命中时复用 CloudMail URL、管理员邮箱和密码查询验证码，因此不需要 VPS 或 Cloudflare Tunnel。两条通道可以同时启用。
+
 ---
 
 ## 配置

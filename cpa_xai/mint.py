@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,6 +18,39 @@ LogFn = Callable[[str], None]
 
 def _noop(_: str) -> None:
     return None
+
+
+def _safe_log_callback(callback: LogFn) -> LogFn:
+    """Prevent Windows console encoding errors from aborting a mint run."""
+
+    def _safe(message: str) -> None:
+        text = str(message)
+        try:
+            callback(text)
+        except UnicodeEncodeError:
+            encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+            escaped = text.encode(encoding, errors="backslashreplace").decode(
+                encoding, errors="replace"
+            )
+            callback(escaped)
+
+    return _safe
+
+
+def _is_browser_disconnect_error(exc: BaseException) -> bool:
+    """Return True only for transient browser/page connection failures."""
+    name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    return (
+        "pagedisconnected" in name
+        or "browserdisconnected" in name
+        or "与页面的连接已断开" in message
+        or "page disconnected" in message
+        or "browser disconnected" in message
+        or "browser has disconnected" in message
+        or "target closed" in message
+        or "connection was closed" in message
+    )
 
 
 def mint_and_export(
@@ -34,6 +69,7 @@ def mint_and_export(
     cookies: Any | None = None,
     reuse_browser: bool = True,
     recycle_every: int = 15,
+    browser_retries: int = 2,
     log: LogFn | None = None,
     cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -41,7 +77,7 @@ def mint_and_export(
 
     Returns dict with keys: ok, path, email, probe, error?
     """
-    log = log or _noop
+    log = _safe_log_callback(log or _noop)
     email = (email or "").strip()
     if not email or not password:
         return {"ok": False, "email": email, "error": "missing email/password"}
@@ -51,24 +87,42 @@ def mint_and_export(
     resolved = resolve_proxy(proxy)
     set_runtime_proxy(resolved or None)
     log(f"mint start: {email} proxy={proxy_log_label(resolved) or '(none)'}")
-    try:
-        tokens = mint_with_browser(
-            email=email,
-            password=password,
-            page=None if force_standalone else page,
-            proxy=resolved or None,
-            headless=headless,
-            browser_timeout_sec=browser_timeout_sec,
-            force_standalone=force_standalone,
-            cookies=cookies,
-            reuse_browser=reuse_browser,
-            recycle_every=recycle_every,
-            poll_log=log,
-            cancel=cancel,
-        )
-    except Exception as e:  # noqa: BLE001
-        log(f"mint failed: {e}")
-        return {"ok": False, "email": email, "error": str(e)}
+    retries = max(0, min(int(browser_retries or 0), 5))
+    tokens = None
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 2):
+        try:
+            tokens = mint_with_browser(
+                email=email,
+                password=password,
+                page=None if force_standalone else page,
+                proxy=resolved or None,
+                headless=headless,
+                browser_timeout_sec=browser_timeout_sec,
+                force_standalone=force_standalone,
+                cookies=cookies,
+                reuse_browser=reuse_browser,
+                recycle_every=recycle_every,
+                poll_log=log,
+                cancel=cancel,
+            )
+            break
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            if not _is_browser_disconnect_error(e) or attempt > retries:
+                log(f"mint failed: {e}")
+                return {"ok": False, "email": email, "error": str(e)}
+            delay = min(1.5 * attempt, 4.0)
+            log(
+                f"browser disconnected; rebuilding Chromium and retrying "
+                f"({attempt}/{retries + 1}) after {delay:.1f}s"
+            )
+            time.sleep(delay)
+
+    if tokens is None:
+        error = str(last_error or "browser mint failed without result")
+        log(f"mint failed: {error}")
+        return {"ok": False, "email": email, "error": error}
 
     payload = build_cpa_xai_auth(
         email=email,

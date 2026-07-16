@@ -63,6 +63,8 @@
   "nav_email_button_timeout": 12,
   "// email_form_timeout": "邮箱表单可见超时（秒）",
   "email_form_timeout": 20,
+  "// screenshot_on_error": "页面交互失败时自动截图到 screenshots/ 目录（Web 模式也生效，不受 skip_debug_io 控制）",
+  "screenshot_on_error": false,
   "// mail_timeout": "收验证码总超时（秒）",
   "mail_timeout": 150,
   "// mail_poll_interval": "收件轮询间隔（秒）",

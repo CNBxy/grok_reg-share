@@ -636,7 +636,8 @@ const CONFIG_SECTIONS = {
     "mail_timeout", "mail_poll_interval", "mail_retry_count", "code_form_timeout",
     "profile_timeout", "turnstile_retry_limit", "turnstile_stuck_timeout",
     "sso_timeout_base", "sso_timeout_max", "sso_progress_extension",
-    "sso_cookie_read_timeout", "email_submit_confirm_timeout", "show_tutorial_on_start"
+    "sso_cookie_read_timeout", "email_submit_confirm_timeout", "show_tutorial_on_start",
+    "screenshot_on_error"
   ],
   "grok2api 同步": [
     "grok2api_auto_add_local", "grok2api_local_token_file", "grok2api_auto_add_remote",
@@ -692,6 +693,7 @@ const CONFIG_LABELS = {
   "account_hard_timeout": "单号硬超时（秒）",
   "nav_email_button_timeout": "等待「使用邮箱」按钮超时（秒）",
   "email_form_timeout": "邮箱表单可见超时（秒）",
+  "screenshot_on_error": "页面交互失败时截图到 screenshots/",
   "mail_timeout": "收验证码总超时（秒）",
   "mail_poll_interval": "邮件轮询间隔（秒）",
   "mail_retry_count": "邮件 API 失败重试次数",

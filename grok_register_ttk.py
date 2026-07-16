@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "cpa_mint_browser_retries": 2,
     "nav_email_button_timeout": 12,
     "email_form_timeout": 20,
+    "screenshot_on_error": False,
 }
 
 config = DEFAULT_CONFIG.copy()
@@ -182,6 +183,24 @@ def take_screenshot(page, tag: str = ""):
         print(f"  [screenshot] saved: {path}")
     except Exception as e:
         print(f"  [screenshot] err: {e}")
+
+
+def take_error_screenshot(page, tag: str = ""):
+    """页面交互失败时截图保存到 screenshots/ 目录。
+
+    不受 PERF_FLAGS.skip_debug_io 控制，仅由 config.screenshot_on_error 开关。
+    """
+    if not config.get("screenshot_on_error"):
+        return
+    try:
+        os.makedirs(_SCREENSHOT_DIR, exist_ok=True)
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(_SCREENSHOT_DIR, f"error_{ts}_{tag}.png")
+        page.get_screenshot(path=path)
+        print(f"  [error-screenshot] saved: {path}")
+    except Exception as e:
+        print(f"  [error-screenshot] err: {e}")
 
 
 # ── 超时守卫 ──
@@ -2032,6 +2051,7 @@ return true;
         page_html = page.html[:500] if page else "no page"
         log_callback(f"[Debug] 页面内容片段: {page_html}")
 
+    take_error_screenshot(page, "no_email_signup_btn")
     raise Exception("未找到「使用邮箱注册」按钮")
 
 
@@ -2112,12 +2132,7 @@ function isVisible(node) {
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
 }
-const selectors = 'input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"], input[name="username"], input[placeholder*="mail" i], input[placeholder*="邮箱" i], input[placeholder*="email" i]';
-let input = Array.from(document.querySelectorAll(selectors)).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
-if (!input) {
-    // 兜底：取页面上第一个可见且可编辑的 text-like input
-    input = Array.from(document.querySelectorAll('input[type="text"], input[type="text"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
-}
+const input = Array.from(document.querySelectorAll('input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
 if (!input) return 'not-ready';
 input.focus(); input.click();
 // 清空并设置值
@@ -2167,11 +2182,7 @@ function isVisible(node) {
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
 }
-const selectors = 'input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"], input[name="username"], input[placeholder*="mail" i], input[placeholder*="邮箱" i], input[placeholder*="email" i]';
-let input = Array.from(document.querySelectorAll(selectors)).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
-if (!input) {
-    input = Array.from(document.querySelectorAll('input[type="text"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
-}
+const input = Array.from(document.querySelectorAll('input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
 if (!input || !input.checkValidity() || !(input.value || '').trim()) return false;
 const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true');
 const submitButton = buttons.find((node) => {
@@ -2197,6 +2208,7 @@ return true;
             take_screenshot(page, "email-submitted")
             return email, dev_token
         human_sleep(0.5, cancel_callback)
+    take_error_screenshot(page, "no_email_input")
     raise Exception("未找到邮箱输入框或注册按钮")
 
 
@@ -2349,6 +2361,7 @@ return 'clicked';
 def getTurnstileToken(log_callback=None, cancel_callback=None):
     page = _get_page()
     if page is None:
+        take_error_screenshot(page, "no_page_turnstile")
         raise Exception("页面未就绪，无法执行 Turnstile")
 
     try:
@@ -2423,6 +2436,7 @@ if (nodes.length && typeof nodes[0].click === 'function') nodes[0].click();
             pass
         human_sleep(1, cancel_callback)
 
+    take_error_screenshot(page, "turnstile_failed")
     raise Exception("Turnstile 获取 token 失败")
 
 
@@ -2672,6 +2686,7 @@ return String(cfInput.value || '').trim().length;
 
         human_sleep(0.5, cancel_callback)
 
+    take_error_screenshot(page, "profile_failed")
     raise Exception("最终注册页资料填写失败")
 
 
@@ -2950,6 +2965,7 @@ if (btn) { btn.click(); return 'clicked'; }
 return 'not-found';
 """)
     if clicked != 'clicked':
+        take_error_screenshot(page, "no_email_login_btn")
         raise Exception("未找到「使用邮箱登录」按钮")
     human_sleep(2, cancel_callback)
     if log_callback:

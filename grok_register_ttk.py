@@ -62,6 +62,7 @@ DEFAULT_CONFIG = {
     "nav_email_button_timeout": 12,
     "email_form_timeout": 20,
     "screenshot_on_error": False,
+    "screenshot_interval": False,
 }
 
 config = DEFAULT_CONFIG.copy()
@@ -208,6 +209,57 @@ def take_error_screenshot(page, tag: str = ""):
         print(f"  [error-html] saved: {html_path}")
     except Exception as e:
         print(f"  [error-screenshot] err: {e}")
+
+
+# ── 流程定时截图 ──
+
+_screenshot_thread = None
+_screenshot_stop = threading.Event()
+
+
+def start_interval_screenshot(worker_id: int | str = ""):
+    """启动后台线程，每 0.1s 截图一张到 screenshots/ 目录。
+
+    受 config.screenshot_interval 开关控制。关闭时调用无效果。
+    每个账号注册开始时调用 start，结束时调用 stop。
+    """
+    global _screenshot_thread, _screenshot_stop
+    if not config.get("screenshot_interval"):
+        return
+    stop_interval_screenshot()
+    _screenshot_stop.clear()
+    wid = str(worker_id)
+
+    def _loop():
+        import itertools
+        counter = itertools.count()
+        while not _screenshot_stop.is_set():
+            try:
+                page = _get_page()
+                if page is None:
+                    _screenshot_stop.wait(0.1)
+                    continue
+                os.makedirs(_SCREENSHOT_DIR, exist_ok=True)
+                seq = next(counter)
+                ts = datetime.datetime.now().strftime("%H%M%S")
+                path = os.path.join(_SCREENSHOT_DIR, f"flow_{wid}_{ts}_{seq:05d}.png")
+                page.get_screenshot(path=path)
+            except Exception:
+                pass
+            _screenshot_stop.wait(0.1)
+
+    _screenshot_thread = threading.Thread(target=_loop, daemon=True, name=f"sshot-{wid}")
+    _screenshot_thread.start()
+
+
+def stop_interval_screenshot():
+    """停止流程定时截图线程。"""
+    global _screenshot_thread, _screenshot_stop
+    if _screenshot_thread is None:
+        return
+    _screenshot_stop.set()
+    _screenshot_thread.join(timeout=2)
+    _screenshot_thread = None
 
 
 # ── 超时守卫 ──
@@ -3543,49 +3595,53 @@ class GrokRegisterGUI:
         code = ""
         mail_ok = False
         max_mail_retry = 3
-        for mail_try in range(1, max_mail_retry + 1):
-            logf(f"[*] 1. 打开注册页 (尝试 {mail_try}/{max_mail_retry})")
-            open_signup_page(log_callback=logf, cancel_callback=self.should_stop)
-            logf("[*] 2. 创建邮箱并提交")
-            email, dev_token = fill_email_and_submit(log_callback=logf, cancel_callback=self.should_stop)
-            logf(f"[*] 邮箱: {email}")
-            try:
-                with open(os.path.join(os.path.dirname(__file__), "mail_credentials.txt"), "a", encoding="utf-8") as f:
-                    f.write(f"{email}\t{dev_token}\n")
-            except Exception:
-                pass
-            logf("[*] 3. 拉取验证码")
-            try:
-                code = fill_code_and_submit(email, dev_token, log_callback=logf, cancel_callback=self.should_stop)
-                mail_ok = True
-                break
-            except Exception as mail_exc:
-                msg = str(mail_exc)
-                if ("未收到验证码" in msg or "验证码" in msg) and mail_try < max_mail_retry:
-                    logf(f"[!] 本邮箱未取到验证码，自动更换新邮箱重试: {msg}")
-                    restart_browser(log_callback=logf)
-                    sleep_with_cancel(1, self.should_stop)
-                    continue
-                raise
-        if not mail_ok:
-            raise Exception("验证码阶段失败，已达到最大重试次数")
-        logf(f"[*] 验证码: {code}")
-        logf("[*] 4. 填写资料")
-        profile = fill_profile_and_submit(log_callback=logf, cancel_callback=self.should_stop)
-        logf(f"[*] 资料已填: {profile.get('given_name')} {profile.get('family_name')}")
-        logf("[*] 5. 等待 sso cookie")
-        sso = wait_for_sso_cookie(log_callback=logf, cancel_callback=self.should_stop)
-        with self.stats_lock:
-            self.results.append({"email": email, "sso": sso, "profile": profile})
-            self.success_count += 1
-            line = f"{email}----{profile.get('password','')}----{sso}\n"
-            try:
-                with open(self.accounts_output_file, "a", encoding="utf-8") as f:
-                    f.write(line)
-            except Exception as file_exc:
-                logf(f"[Debug] 保存账号文件失败: {file_exc}")
-        add_token_to_grok2api_pools(sso, email=email, log_callback=logf)
-        logf(f"[+] 注册成功: {email}")
+        start_interval_screenshot(idx)
+        try:
+            for mail_try in range(1, max_mail_retry + 1):
+                logf(f"[*] 1. 打开注册页 (尝试 {mail_try}/{max_mail_retry})")
+                open_signup_page(log_callback=logf, cancel_callback=self.should_stop)
+                logf("[*] 2. 创建邮箱并提交")
+                email, dev_token = fill_email_and_submit(log_callback=logf, cancel_callback=self.should_stop)
+                logf(f"[*] 邮箱: {email}")
+                try:
+                    with open(os.path.join(os.path.dirname(__file__), "mail_credentials.txt"), "a", encoding="utf-8") as f:
+                        f.write(f"{email}\t{dev_token}\n")
+                except Exception:
+                    pass
+                logf("[*] 3. 拉取验证码")
+                try:
+                    code = fill_code_and_submit(email, dev_token, log_callback=logf, cancel_callback=self.should_stop)
+                    mail_ok = True
+                    break
+                except Exception as mail_exc:
+                    msg = str(mail_exc)
+                    if ("未收到验证码" in msg or "验证码" in msg) and mail_try < max_mail_retry:
+                        logf(f"[!] 本邮箱未取到验证码，自动更换新邮箱重试: {msg}")
+                        restart_browser(log_callback=logf)
+                        sleep_with_cancel(1, self.should_stop)
+                        continue
+                    raise
+            if not mail_ok:
+                raise Exception("验证码阶段失败，已达到最大重试次数")
+            logf(f"[*] 验证码: {code}")
+            logf("[*] 4. 填写资料")
+            profile = fill_profile_and_submit(log_callback=logf, cancel_callback=self.should_stop)
+            logf(f"[*] 资料已填: {profile.get('given_name')} {profile.get('family_name')}")
+            logf("[*] 5. 等待 sso cookie")
+            sso = wait_for_sso_cookie(log_callback=logf, cancel_callback=self.should_stop)
+            with self.stats_lock:
+                self.results.append({"email": email, "sso": sso, "profile": profile})
+                self.success_count += 1
+                line = f"{email}----{profile.get('password','')}----{sso}\n"
+                try:
+                    with open(self.accounts_output_file, "a", encoding="utf-8") as f:
+                        f.write(line)
+                except Exception as file_exc:
+                    logf(f"[Debug] 保存账号文件失败: {file_exc}")
+            add_token_to_grok2api_pools(sso, email=email, log_callback=logf)
+            logf(f"[+] 注册成功: {email}")
+        finally:
+            stop_interval_screenshot()
 
     def _worker_loop(self, worker_id, total, task_queue):
         prefix = f"[T{worker_id}]"

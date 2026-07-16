@@ -65,6 +65,8 @@
   "email_form_timeout": 20,
   "// screenshot_on_error": "页面交互失败时自动截图到 screenshots/ 目录（Web 模式也生效，不受 skip_debug_io 控制）",
   "screenshot_on_error": false,
+  "// screenshot_interval": "开启后整个注册流程每 0.1s 截一张图到 screenshots/ 目录",
+  "screenshot_interval": false,
   "// mail_timeout": "收验证码总超时（秒）",
   "mail_timeout": 150,
   "// mail_poll_interval": "收件轮询间隔（秒）",

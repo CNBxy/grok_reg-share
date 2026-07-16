@@ -207,6 +207,7 @@ def register_one(
         log(worker_id, f"! 浏览器启动失败: {exc}")
         return None
 
+    reg.start_interval_screenshot(worker_id)
     for mail_try in range(1, max_mail_retry + 1):
         try:
             log(worker_id, f"--- 第 {idx}/{total} 个账号, 邮箱尝试 {mail_try}/{max_mail_retry} ---")
@@ -243,6 +244,7 @@ def register_one(
                 reg.restart_browser(log_callback=lambda m: log(worker_id, m))
             except Exception:
                 pass
+            reg.stop_interval_screenshot()
             return None
 
     try:
@@ -318,6 +320,7 @@ def register_one(
             log(worker_id, "[cpa] mint skipped (no queue / inline)")
 
         _inc("reg_success")
+        reg.stop_interval_screenshot()
         return job
     except Exception as exc:
         log(worker_id, f"! 注册失败: {exc}")
@@ -328,6 +331,7 @@ def register_one(
             reg.restart_browser(log_callback=lambda m: log(worker_id, m))
         except Exception:
             pass
+        reg.stop_interval_screenshot()
         return None
 
 

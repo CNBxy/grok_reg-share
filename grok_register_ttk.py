@@ -186,7 +186,7 @@ def take_screenshot(page, tag: str = ""):
 
 
 def take_error_screenshot(page, tag: str = ""):
-    """页面交互失败时截图保存到 screenshots/ 目录。
+    """页面交互失败时截图 + 保存 HTML 到 screenshots/ 目录。
 
     不受 PERF_FLAGS.skip_debug_io 控制，仅由 config.screenshot_on_error 开关。
     """
@@ -196,9 +196,16 @@ def take_error_screenshot(page, tag: str = ""):
         os.makedirs(_SCREENSHOT_DIR, exist_ok=True)
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(_SCREENSHOT_DIR, f"error_{ts}_{tag}.png")
-        page.get_screenshot(path=path)
-        print(f"  [error-screenshot] saved: {path}")
+        # 截图
+        png_path = os.path.join(_SCREENSHOT_DIR, f"error_{ts}_{tag}.png")
+        page.get_screenshot(path=png_path)
+        print(f"  [error-screenshot] saved: {png_path}")
+        # 保存页面 HTML
+        html_path = os.path.join(_SCREENSHOT_DIR, f"error_{ts}_{tag}.html")
+        html = page.html if page else ""
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"  [error-html] saved: {html_path}")
     except Exception as e:
         print(f"  [error-screenshot] err: {e}")
 

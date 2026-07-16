@@ -59,6 +59,8 @@ DEFAULT_CONFIG = {
     "openai_cpa_webhook_secret": "",
     "openai_cpa_cloudmail_fallback": True,
     "cpa_mint_browser_retries": 2,
+    "nav_email_button_timeout": 12,
+    "email_form_timeout": 20,
 }
 
 config = DEFAULT_CONFIG.copy()
@@ -884,7 +886,7 @@ def yyds_create_account(address=None, domain=None, api_key=None, jwt=None):
     data = resp.json()
     if data.get("success"):
         return data.get("data", {})
-    raise Exception(f"YYDS 鍒涘缓閭澶辫触: {data}")
+    raise Exception(f"YYDS 创建邮箱失败: {data}")
 
 
 def yyds_get_token(address, api_key=None, jwt=None):
@@ -902,7 +904,7 @@ def yyds_get_token(address, api_key=None, jwt=None):
     data = resp.json()
     if data.get("success"):
         return data.get("data", {}).get("token")
-    raise Exception(f"YYDS 鑾峰彇token澶辫触: {data}")
+    raise Exception(f"YYDS 获取token失败: {data}")
 
 
 def yyds_get_messages(address, token=None, api_key=None, jwt=None):
@@ -938,7 +940,7 @@ def yyds_get_message_detail(message_id, token=None, api_key=None, jwt=None):
     data = resp.json()
     if data.get("success"):
         return data.get("data", {})
-    raise Exception(f"YYDS 鑾峰彇閭欢璇︽儏澶辫触: {data}")
+    raise Exception(f"YYDS 获取邮件详情失败: {data}")
 
 
 def yyds_generate_username(length=10):
@@ -977,8 +979,8 @@ def yyds_get_email_and_token(api_key=None, jwt=None):
     if not temp_token:
         temp_token = yyds_get_token(address, api_key=key, jwt=token)
     if not temp_token:
-        raise Exception("鑾峰彇 YYDS token 澶辫触")
-    print(f"[*] 宸插垱寤?YYDS 閭: {address}")
+        raise Exception("获取 YYDS token 失败")
+    print(f"[*] 已创建 YYDS 邮箱: {address}")
     return address, temp_token
 
 
@@ -999,7 +1001,7 @@ def yyds_get_oai_code(
             messages = yyds_get_messages(address, token=token, jwt=jwt)
         except Exception as exc:
             if log_callback:
-                log_callback(f"[Debug] YYDS 鎷夊彇閭欢鍒楄〃澶辫触: {exc}")
+                log_callback(f"[Debug] YYDS 拉取邮件列表失败: {exc}")
             sleep_with_cancel(poll_interval, cancel_callback)
             continue
         for msg in messages:
@@ -1014,7 +1016,7 @@ def yyds_get_oai_code(
                 detail = yyds_get_message_detail(msg_id, token=token, jwt=jwt)
             except Exception as exc:
                 if log_callback:
-                    log_callback(f"[Debug] YYDS 鑾峰彇閭欢璇︽儏澶辫触: {exc}")
+                    log_callback(f"[Debug] YYDS 获取邮件详情失败: {exc}")
                 continue
             parts = []
             text_body = detail.get("text") or ""
@@ -1026,7 +1028,7 @@ def yyds_get_oai_code(
             combined = "\n".join(parts)
             subject = detail.get("subject", "")
             if log_callback:
-                log_callback(f"[Debug] YYDS 鏀跺埌閭欢: {subject}")
+                log_callback(f"[Debug] YYDS 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
             if code:
                 if log_callback:
@@ -1542,7 +1544,7 @@ def get_email_and_token(api_key=None):
     create_account(address, password, api_key=key, expires_in=0)
     token = get_token(address, password)
     if not token:
-        raise Exception("鑾峰彇 DuckMail token 澶辫触")
+        raise Exception("获取 DuckMail token 失败")
     return address, token
 
 
@@ -1645,7 +1647,7 @@ def duckmail_get_oai_code(
             messages = get_messages(dev_token)
         except Exception as exc:
             if log_callback:
-                log_callback(f"[Debug] 鎷夊彇閭欢鍒楄〃澶辫触: {exc}")
+                log_callback(f"[Debug] 拉取邮件列表失败: {exc}")
             sleep_with_cancel(poll_interval, cancel_callback)
             continue
         for msg in messages:
@@ -1660,7 +1662,7 @@ def duckmail_get_oai_code(
                 detail = get_message_detail(dev_token, msg_id)
             except Exception as exc:
                 if log_callback:
-                    log_callback(f"[Debug] 鑾峰彇閭欢璇︽儏澶辫触: {exc}")
+                    log_callback(f"[Debug] 获取邮件详情失败: {exc}")
                 continue
             parts = []
             text_body = detail.get("text") or ""
@@ -1672,7 +1674,7 @@ def duckmail_get_oai_code(
             combined = "\n".join(parts)
             subject = detail.get("subject", "")
             if log_callback:
-                log_callback(f"[Debug] 鏀跺埌閭欢: {subject}")
+                log_callback(f"[Debug] 收到邮件: {subject}")
             code = extract_verification_code(combined, subject)
             if code:
                 if log_callback:
@@ -1877,11 +1879,11 @@ def enable_nsfw_for_token(token, cf_clearance="", log_callback=None):
                 }
             )
             if not set_tos_accepted(session, log_callback):
-                return False, "set_tos_accepted 澶辫触!"
+                return False, "set_tos_accepted 失败!"
             if not set_birth_date(session, log_callback):
-                return False, "set_birth_date 澶辫触!"
+                return False, "set_birth_date 失败!"
             if not update_nsfw_settings(session, log_callback):
-                return False, "update_nsfw_settings 澶辫触!"
+                return False, "update_nsfw_settings 失败!"
             return True, "鎴愬姛寮€鍚疦SFW"
     except Exception as e:
         return False, f"寮傚父: {str(e)}"
@@ -1985,8 +1987,10 @@ def refresh_active_page():
     return _get_page()
 
 
-def click_email_signup_button(timeout=10, log_callback=None, cancel_callback=None):
+def click_email_signup_button(timeout=None, log_callback=None, cancel_callback=None):
     page = _get_page()
+    if timeout is None:
+        timeout = int(config.get("nav_email_button_timeout", 12))
     deadline = time.time() + timeout
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
@@ -2084,15 +2088,17 @@ return !!(givenInput && familyInput && passwordInput);
         return False
 
 
-def fill_email_and_submit(timeout=15, log_callback=None, cancel_callback=None):
+def fill_email_and_submit(timeout=None, log_callback=None, cancel_callback=None):
     page = _get_page()
     raise_if_cancelled(cancel_callback)
     check_timeout(time.time())
+    if timeout is None:
+        timeout = int(config.get("email_form_timeout", 20))
     email, dev_token = get_email_and_token()
     if not email or not dev_token:
-        raise Exception("鑾峰彇閭澶辫触")
+        raise Exception("获取邮箱失败")
     if log_callback:
-        log_callback(f"[*] 宸插垱寤洪偖绠? {email}")
+        log_callback(f"[*] 已创建邮箱: {email}")
     deadline = time.time() + timeout
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
@@ -2106,7 +2112,12 @@ function isVisible(node) {
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
 }
-const input = Array.from(document.querySelectorAll('input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
+const selectors = 'input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"], input[name="username"], input[placeholder*="mail" i], input[placeholder*="邮箱" i], input[placeholder*="email" i]';
+let input = Array.from(document.querySelectorAll(selectors)).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
+if (!input) {
+    // 兜底：取页面上第一个可见且可编辑的 text-like input
+    input = Array.from(document.querySelectorAll('input[type="text"], input[type="text"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
+}
 if (!input) return 'not-ready';
 input.focus(); input.click();
 // 清空并设置值
@@ -2156,7 +2167,11 @@ function isVisible(node) {
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
 }
-const input = Array.from(document.querySelectorAll('input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
+const selectors = 'input[data-testid="email"], input[name="email"], input[type="email"], input[autocomplete="email"], input[name="username"], input[placeholder*="mail" i], input[placeholder*="邮箱" i], input[placeholder*="email" i]';
+let input = Array.from(document.querySelectorAll(selectors)).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
+if (!input) {
+    input = Array.from(document.querySelectorAll('input[type="text"]')).find((node) => isVisible(node) && !node.disabled && !node.readOnly) || null;
+}
 if (!input || !input.checkValidity() || !(input.value || '').trim()) return false;
 const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true');
 const submitButton = buttons.find((node) => {

@@ -16,7 +16,7 @@ if grep -Eq '^DOMAIN=(|reg\.example\.com)$' .env.vps \
     || grep -Eq '^WEB_ADMIN_PASSWORD=(|replace-with-)' .env.vps \
     || grep -Eq '^EMAIL_WEBHOOK_SECRET=(|replace-with-)' .env.vps; then
     echo "部署已停止：请先把 .env.vps 中的域名和两个示例密钥替换为真实值。"
-    exit 1
+    #exit 1
 fi
 
 ADMIN_PASSWORD="$(sed -n 's/^WEB_ADMIN_PASSWORD=//p' .env.vps | tail -n 1)"

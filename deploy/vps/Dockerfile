@@ -13,6 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     xauth \
     xvfb \
+    tk8.6 \
+    libtk8.6 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

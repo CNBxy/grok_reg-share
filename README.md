@@ -110,10 +110,35 @@ cp config.example.json config.json
 cpa_proxy  >  proxy  >  环境变量 https_proxy/http_proxy
 ```
 
-- 只配 `proxy=http://127.0.0.1:7890` 且 `cpa_proxy` 为空 → mint 也走 7890  
-- 两者都配 → mint 只用 `cpa_proxy`  
+- 只配 `proxy=http://127.0.0.1:7890` 且 `cpa_proxy` 为空 -> mint 也走 7890  
+- 两者都配 -> mint 只用 `cpa_proxy`  
 - 以前调试时在 shell 里 `export https_proxy=7890` **不会再压过** config  
 - Chromium `--proxy-server` **不能**带 `user:pass`（账号会剥掉，仅 host:port）；HTTP 库仍可用带认证的 URL  
+
+### 代理协议支持
+
+| 协议 | 格式 | 说明 |
+|------|------|------|
+| HTTP | `http://host:port` 或 `http://user:pass@host:port` | 最常用 |
+| HTTPS | `https://host:port` | 较少用 |
+| SOCKS5 | `socks5://host:port` 或 `socks5://user:pass@host:port` | 本地 SOCKS5 代理 |
+| SOCKS5h | `socks5h://host:port` | SOCKS5 + 远程 DNS 解析（防 DNS 泄露） |
+| SOCKS4 | `socks4://host:port` | 旧协议 |
+
+**所有协议在 `proxy` / `cpa_proxy` 中均可直接填写。** CPA 模块（urllib + PySocks）和注册主流程（curl_cffi）均支持全部协议；Chromium `--proxy-server` 支持 http/socks5/socks4。
+
+#### Docker VPS 部署：使用 WARP SOCKS5
+
+`docker-compose.vps.yml` 内置 `caomingjun/warp` 容器，已在 `grok_internal` 网络中。配置：
+
+```json
+{
+  "proxy": "socks5://warp:1080",
+  "cpa_proxy": "socks5://warp:1080"
+}
+```
+
+宿主机也可访问 WARP（默认端口 1080），或通过 `WARP_HOST_PORT` 环境变量自定义。
 
 ### 与 CPA 相关的关键项（摘要）
 
@@ -126,8 +151,8 @@ cpa_proxy  >  proxy  >  环境变量 https_proxy/http_proxy
 | `cpa_base_url` | 上游 API 根 | **必须** `https://cli-chat-proxy.grok.com/v1` |
 | `cpa_headless` | 浏览器无头 | **`false`**（推荐） |
 | `cpa_force_standalone` | 独立浏览器做 consent | **`true`** |
-| `cpa_proxy` | mint 专用代理 | 如 `http://127.0.0.1:7890`；空则用 `proxy` |
-| `proxy` | 注册主代理 | 如 本机 HTTP 代理 `7890` |
+| `cpa_proxy` | mint 专用代理 | 如 `http://127.0.0.1:7890`、`socks5://warp:1080`；空则用 `proxy` |
+| `proxy` | 注册主代理 | 如 本机 HTTP 代理 `7890`、`socks5://127.0.0.1:1080` |
 | `api_reverse_tools` | 高级：自定义 `cpa_xai` 父目录；空=本仓库根 | 一般留空 |
 | `cpa_mint_required` | mint 失败是否整号失败 | 通常 `false` |
 

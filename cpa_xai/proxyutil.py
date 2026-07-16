@@ -7,6 +7,19 @@ Priority (highest first):
 
 Thread-local pin avoids cross-talk when multiple mint workers run with
 different proxies in the same process.
+
+Supported proxy schemes:
+  - http://   (standard HTTP proxy)
+  - https://  (HTTPS proxy, less common)
+  - socks5://  (SOCKS5, with or without user:pass@)
+  - socks5h:// (SOCKS5 with remote DNS resolution)
+  - socks4://  (SOCKS4)
+  - bare host:port (treated as http://)
+
+SOCKS support for urllib.request requires PySocks (``pip install pysocks``).
+When PySocks is installed, urllib.request.ProxyHandler accepts socks5://
+and socks5h:// URLs directly.  curl_cffi (used by grok_register_ttk.py)
+supports SOCKS natively via libcurl -- no extra dependency needed.
 """
 
 from __future__ import annotations
@@ -16,6 +29,8 @@ import threading
 from urllib.parse import urlparse
 
 _thread = threading.local()
+
+SOCKS_SCHEMES = ("socks5", "socks5h", "socks4")
 
 
 def set_runtime_proxy(proxy: str | None) -> None:
@@ -42,8 +57,31 @@ def resolve_proxy(explicit: str | None = None) -> str:
     return ""
 
 
+def is_socks(proxy: str) -> bool:
+    """Return True if the proxy URL uses a SOCKS scheme."""
+    p = (proxy or "").strip()
+    if not p or "://" not in p:
+        return False
+    scheme = urlparse(p).scheme.lower()
+    return scheme in SOCKS_SCHEMES
+
+
+def _default_port(scheme: str) -> int:
+    """Default port for a proxy scheme."""
+    s = scheme.lower()
+    if s in ("socks5", "socks5h", "socks4"):
+        return 1080
+    if s == "https":
+        return 443
+    return 80  # http, unknown
+
+
 def proxy_for_chromium(proxy: str) -> str:
-    """Chromium --proxy-server cannot embed user:pass; host:port only."""
+    """Chromium --proxy-server cannot embed user:pass; host:port only.
+
+    Supports all schemes Chromium recognises: http, https, socks5, socks4.
+    Returns scheme://host:port (userinfo stripped).
+    """
     p = (proxy or "").strip()
     if not p:
         return ""
@@ -51,8 +89,8 @@ def proxy_for_chromium(proxy: str) -> str:
     host = u.hostname or ""
     if not host:
         return ""
-    port = u.port or (443 if (u.scheme or "http") == "https" else 80)
-    scheme = u.scheme or "http"
+    scheme = (u.scheme or "http").lower()
+    port = u.port or _default_port(scheme)
     return f"{scheme}://{host}:{port}"
 
 

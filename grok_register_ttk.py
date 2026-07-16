@@ -619,8 +619,16 @@ def create_browser_options():
             u = urlparse(proxy if "://" in proxy else f"http://{proxy}")
             host = u.hostname or ""
             if host:
-                port = u.port or (443 if (u.scheme or "http") == "https" else 80)
-                scheme = u.scheme or "http"
+                # SOCKS5/SOCKS5h default 1080, HTTPS 443, HTTP/unknown 80
+                scheme = (u.scheme or "http").lower()
+                if u.port:
+                    port = u.port
+                elif scheme in ("socks5", "socks5h", "socks4"):
+                    port = 1080
+                elif scheme == "https":
+                    port = 443
+                else:
+                    port = 80
                 # Chromium --proxy-server cannot embed user:pass
                 options.set_argument(f"--proxy-server={scheme}://{host}:{port}")
         except Exception as e:

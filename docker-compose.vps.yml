@@ -1,4 +1,22 @@
 services:
+  warp:
+    image: caomingjun/warp:latest
+    restart: unless-stopped
+    environment:
+      WARP_SLEEP: 2
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "${WARP_HOST:-0.0.0.0}:${WARP_HOST_PORT:-1080}:1080"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 1080 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - grok_internal
+
   app:
     build:
       context: .

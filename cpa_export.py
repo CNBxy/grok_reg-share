@@ -212,19 +212,22 @@ def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None
 
     配置项：
         cpa_remote_push_enabled  : 是否开启远程推送
-        cpa_remote_push_url      : 远程仓管 API 完整 URL
-        cpa_remote_push_token    : Bearer 认证 token（可空）
+        cpa_remote_push_url      : 远程仓管 API 根 URL，如 http://localhost:8317
+        cpa_remote_push_token    : Bearer 认证 token（Management Key，可空）
 
-    推送方式：POST JSON body = xai-*.json 文件内容，
-    Header: Content-Type: application/json, Authorization: Bearer <token>
+    推送方式（CLIProxyAPI 原始 JSON 上传）：
+        POST {url}/v0/management/auth-files?name=xai-<email>.json
+        Content-Type: application/json
+        Authorization: Bearer <token>
+        Body = xai-*.json 文件原始内容
     """
     log = log or (lambda m: print(m, flush=True))
 
     if not cfg.get("cpa_remote_push_enabled", False):
         return False
 
-    url = str(cfg.get("cpa_remote_push_url", "") or "").strip()
-    if not url:
+    base_url = str(cfg.get("cpa_remote_push_url", "") or "").strip().rstrip("/")
+    if not base_url:
         log("[cpa-push] 远程推送已开启但 URL 未配置，跳过")
         return False
 
@@ -236,10 +239,16 @@ def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None
             log(f"[cpa-push] 文件不存在: {auth_file_path}")
             return False
         with open(auth_path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
+            raw_content = f.read()
+        # 验证是合法 JSON
+        json.loads(raw_content)
     except Exception as e:
         log(f"[cpa-push] 读取文件失败: {e}")
         return False
+
+    # CLIProxyAPI: POST /v0/management/auth-files?name=<filename>
+    filename = auth_path.name
+    target_url = f"{base_url}/v0/management/auth-files?name={filename}"
 
     headers = {"Content-Type": "application/json"}
     if token:
@@ -248,22 +257,23 @@ def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None
     import urllib.request
     import urllib.error
 
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    data = raw_content.encode("utf-8")
+    req = urllib.request.Request(target_url, data=data, headers=headers, method="POST")
 
     # 代理设置：复用 cpa_proxy / proxy
     proxy = (cfg.get("cpa_proxy") or cfg.get("proxy") or "").strip()
-    opener = urllib.request.build_opener()
     if proxy:
         proxy_handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
         opener = urllib.request.build_opener(proxy_handler)
+    else:
+        opener = urllib.request.build_opener()
 
     try:
         resp = opener.open(req, timeout=15)
         body = resp.read().decode("utf-8", errors="replace")
         status = resp.getcode()
         if 200 <= status < 300:
-            log(f"[cpa-push] 已推送 {auth_path.name} 到 {url} (HTTP {status})")
+            log(f"[cpa-push] 已推送 {filename} -> {target_url} (HTTP {status})")
             return True
         else:
             log(f"[cpa-push] 推送失败 HTTP {status}: {body[:200]}")

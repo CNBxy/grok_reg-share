@@ -152,10 +152,10 @@
   "cpa_mint_browser_retries": 2,
 
   "// ===== CPA 远程推送 =====": "",
-  "// cpa_remote_push_enabled": "CPA 导出成功后自动推送到远程仓管 API（CLIProxyAPI 等）。关闭=仅本地保存。",
+  "// cpa_remote_push_enabled": "CPA 导出成功后自动推送到远程 CLIProxyAPI 仓管。关闭=仅本地保存。",
   "cpa_remote_push_enabled": false,
-  "// cpa_remote_push_url": "远程仓管 API 完整 URL，如 http://127.0.0.1:8317/admin/api/auth/import。推送方式 POST JSON body=xai-*.json 文件内容。",
+  "// cpa_remote_push_url": "CLIProxyAPI 根地址，如 http://localhost:8317。推送时自动拼接 /v0/management/auth-files?name=xai-*.json",
   "cpa_remote_push_url": "",
-  "// cpa_remote_push_token": "Bearer 认证 token（如 admin key）。可空。",
+  "// cpa_remote_push_token": "CLIProxyAPI Management Key（Bearer 认证）。可空。",
   "cpa_remote_push_token": ""
 }

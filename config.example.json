@@ -149,5 +149,13 @@
   "// cpa_mint_browser_recycle_every": "mint 浏览器每成功 N 次后完整重启；0=仅出错时重启",
   "cpa_mint_browser_recycle_every": 15,
   "// cpa_mint_browser_retries": "Chromium/页面连接断开时的重建重试次数；不重试密码错误或 Cloudflare 拦截",
-  "cpa_mint_browser_retries": 2
+  "cpa_mint_browser_retries": 2,
+
+  "// ===== CPA 远程推送 =====": "",
+  "// cpa_remote_push_enabled": "CPA 导出成功后自动推送到远程仓管 API（CLIProxyAPI 等）。关闭=仅本地保存。",
+  "cpa_remote_push_enabled": false,
+  "// cpa_remote_push_url": "远程仓管 API 完整 URL，如 http://127.0.0.1:8317/admin/api/auth/import。推送方式 POST JSON body=xai-*.json 文件内容。",
+  "cpa_remote_push_url": "",
+  "// cpa_remote_push_token": "Bearer 认证 token（如 admin key）。可空。",
+  "cpa_remote_push_token": ""
 }

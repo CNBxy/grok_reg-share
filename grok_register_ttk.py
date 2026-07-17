@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     "email_form_timeout": 20,
     "screenshot_on_error": False,
     "screenshot_interval": False,
+    "cpa_remote_push_enabled": False,
+    "cpa_remote_push_url": "",
+    "cpa_remote_push_token": "",
 }
 
 config = DEFAULT_CONFIG.copy()

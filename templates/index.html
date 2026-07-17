@@ -628,7 +628,8 @@ const CONFIG_SECTIONS = {
     "cpa_base_url", "cpa_headless", "cpa_force_standalone", "cpa_mint_workers",
     "cpa_mint_cookie_inject", "cpa_mint_browser_reuse", "cpa_mint_browser_recycle_every",
     "cpa_mint_browser_retries", "cpa_mint_queue_max", "cpa_mint_required", "cpa_probe_after_write", "cpa_probe_chat",
-    "cpa_mint_timeout_sec"
+    "cpa_mint_timeout_sec",
+    "cpa_remote_push_enabled", "cpa_remote_push_url", "cpa_remote_push_token"
   ],
   "注册流程参数": [
     "register_count", "register_threads", "thread_start_interval", "register_max_attempts",
@@ -687,6 +688,9 @@ const CONFIG_LABELS = {
   "cpa_probe_after_write": "写出后探测 Grok 4.5",
   "cpa_probe_chat": "探测时发送测试对话",
   "cpa_mint_timeout_sec": "单号 CPA 超时（秒）",
+  "cpa_remote_push_enabled": "成功后推送到远程 CPA 仓管",
+  "cpa_remote_push_url": "远程仓管 API 地址",
+  "cpa_remote_push_token": "远程推送认证 Token",
   "register_count": "目标注册账号总数",
   "register_threads": "并发注册线程数",
   "thread_start_interval": "线程错峰启动秒数",

@@ -7,6 +7,7 @@ points at a directory that *contains* the `cpa_xai` package.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -191,6 +192,10 @@ def export_cpa_xai_for_account(
             log(f"[cpa] hotload copy failed: {e}")
             result["cpa_copy_error"] = str(e)
 
+    # 成功后推送远程 CPA 仓管（CLIProxyAPI 等）
+    if result.get("ok") and result.get("path"):
+        push_cpa_to_remote(result["path"], cfg, log)
+
     # failure log under register dir
     if not result.get("ok"):
         fail_path = out_dir / "cpa_auth_failed.txt"
@@ -200,3 +205,77 @@ def export_cpa_xai_for_account(
             raise RuntimeError(f"CPA mint required but failed: {result.get('error')}")
 
     return result
+
+
+def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None] | None = None) -> bool:
+    """将 CPA xai-*.json 推送到远程 CPA 仓管 API（CLIProxyAPI 等）。
+
+    配置项：
+        cpa_remote_push_enabled  : 是否开启远程推送
+        cpa_remote_push_url      : 远程仓管 API 完整 URL
+        cpa_remote_push_token    : Bearer 认证 token（可空）
+
+    推送方式：POST JSON body = xai-*.json 文件内容，
+    Header: Content-Type: application/json, Authorization: Bearer <token>
+    """
+    log = log or (lambda m: print(m, flush=True))
+
+    if not cfg.get("cpa_remote_push_enabled", False):
+        return False
+
+    url = str(cfg.get("cpa_remote_push_url", "") or "").strip()
+    if not url:
+        log("[cpa-push] 远程推送已开启但 URL 未配置，跳过")
+        return False
+
+    token = str(cfg.get("cpa_remote_push_token", "") or "").strip()
+
+    try:
+        auth_path = Path(auth_file_path)
+        if not auth_path.exists():
+            log(f"[cpa-push] 文件不存在: {auth_file_path}")
+            return False
+        with open(auth_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        log(f"[cpa-push] 读取文件失败: {e}")
+        return False
+
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    import urllib.request
+    import urllib.error
+
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+    # 代理设置：复用 cpa_proxy / proxy
+    proxy = (cfg.get("cpa_proxy") or cfg.get("proxy") or "").strip()
+    opener = urllib.request.build_opener()
+    if proxy:
+        proxy_handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        opener = urllib.request.build_opener(proxy_handler)
+
+    try:
+        resp = opener.open(req, timeout=15)
+        body = resp.read().decode("utf-8", errors="replace")
+        status = resp.getcode()
+        if 200 <= status < 300:
+            log(f"[cpa-push] 已推送 {auth_path.name} 到 {url} (HTTP {status})")
+            return True
+        else:
+            log(f"[cpa-push] 推送失败 HTTP {status}: {body[:200]}")
+            return False
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        log(f"[cpa-push] 推送失败 HTTP {e.code}: {body}")
+        return False
+    except Exception as e:
+        log(f"[cpa-push] 推送异常: {e}")
+        return False

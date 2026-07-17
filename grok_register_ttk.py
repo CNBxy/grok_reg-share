@@ -2347,6 +2347,7 @@ const submitButton = buttons.find((node) => {
         text === '注册' ||
         text.includes('注册') ||
         lower.includes('sign up') ||
+        lower.includes('signup') ||
         lower.includes('continue') ||
         lower.includes('next')
     );

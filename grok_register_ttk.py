@@ -2692,7 +2692,7 @@ const buttons = Array.from(document.querySelectorAll('button[type="submit"], but
 });
 const submitBtn = buttons.find((node) => {
     const t = (node.innerText || node.textContent || '').replace(/\\s+/g, '').toLowerCase();
-    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount');
+    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
 });
 
 // 必须等待 Cloudflare 校验通过后再提交
@@ -2787,7 +2787,7 @@ const buttons = Array.from(document.querySelectorAll('button[type="submit"], but
 });
 const submitBtn = buttons.find((node) => {
     const t = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
-    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount');
+    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
 });
 if (!submitBtn) return 'no-submit-button';
 submitBtn.focus();
@@ -3018,7 +3018,7 @@ const buttons = Array.from(document.querySelectorAll('button[type="submit"], but
 });
 const submitBtn = buttons.find((node) => {
     const t = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
-    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount');
+    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
 });
 if (!submitBtn) return 'final-page-no-submit';
 submitBtn.focus();

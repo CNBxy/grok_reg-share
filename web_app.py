@@ -127,7 +127,60 @@ def _is_running():
 def _strip_comments(obj):
     return {k: v for k, v in obj.items() if not k.startswith("//") and not k.startswith("#")}
 
+
+def _merge_config_with_example():
+    """自动合并 config.example.json 中的新增字段到 config.json。
+
+    保留用户已在 config.json 中自定义的值，补充 example 中新增的字段。
+    写回时保持 config.example.json 的字段顺序和注释结构。
+    """
+    if not CONFIG_EXAMPLE.exists() or not CONFIG_FILE.exists():
+        return
+
+    try:
+        with open(CONFIG_EXAMPLE, encoding="utf-8") as f:
+            example_raw = json.load(f)
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            user_raw = json.load(f)
+    except Exception:
+        return
+
+    if not isinstance(example_raw, dict) or not isinstance(user_raw, dict):
+        return
+
+    example = _strip_comments(example_raw)
+    user = _strip_comments(user_raw)
+
+    new_keys = [k for k in example if k not in user]
+    if not new_keys:
+        return
+
+    # 以 example 为骨架，合并用户已有值
+    merged = {}
+    for k, v in example_raw.items():
+        if k.startswith("//") or k.startswith("#"):
+            merged[k] = v
+        elif k in user:
+            merged[k] = user[k]
+        else:
+            merged[k] = v
+
+    # 追加用户有但 example 没有的键
+    for k, v in user_raw.items():
+        if k not in merged:
+            merged[k] = v
+
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=4, ensure_ascii=False)
+        print(f"[config] 已自动合并 {len(new_keys)} 个新增配置项: {', '.join(new_keys)}", flush=True)
+    except Exception as e:
+        print(f"[config] 合并配置失败: {e}", flush=True)
+
+
 def load_config():
+    # 每次加载前自动合并 config.example.json 中的新增字段
+    _merge_config_with_example()
     path = CONFIG_FILE if CONFIG_FILE.exists() else CONFIG_EXAMPLE
     # 兼容编码问题：优先 utf-8，失败则回退至 gb18030
     try:

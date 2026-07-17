@@ -30,6 +30,7 @@ from curl_cffi import requests
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+CONFIG_EXAMPLE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.example.json")
 
 DEFAULT_CONFIG = {
     "duckmail_api_key": "",
@@ -338,8 +339,78 @@ class RegistrationCancelled(Exception):
     pass
 
 
+def _strip_config_comments(obj):
+    """去除 config 中以 // 或 # 开头的注释键。"""
+    if not isinstance(obj, dict):
+        return obj
+    return {
+        k: v
+        for k, v in obj.items()
+        if not (isinstance(k, str) and (k.startswith("//") or k.startswith("#")))
+    }
+
+
+def merge_config_with_example():
+    """每次启动时自动合并 config.example.json 的新增字段到 config.json。
+
+    - 保留用户已在 config.json 中自定义的值
+    - 补充 config.example.json 中新增的字段（用户 config.json 中不存在的键）
+    - 不删除用户 config.json 中已有的任何键
+    - 写回时保持 config.example.json 的字段顺序和注释结构
+    """
+    if not os.path.exists(CONFIG_EXAMPLE_FILE):
+        return
+    if not os.path.exists(CONFIG_FILE):
+        return
+
+    try:
+        with open(CONFIG_EXAMPLE_FILE, "r", encoding="utf-8") as f:
+            example_raw = json.load(f)
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            user_raw = json.load(f)
+    except Exception:
+        return
+
+    if not isinstance(example_raw, dict) or not isinstance(user_raw, dict):
+        return
+
+    example = _strip_config_comments(example_raw)
+    user = _strip_config_comments(user_raw)
+
+    # 检查是否有新增字段需要合并
+    new_keys = [k for k in example if k not in user]
+    if not new_keys:
+        return
+
+    # 以 example 为骨架（保持字段顺序+注释），合并用户已有值
+    merged = {}
+    for k, v in example_raw.items():
+        if k.startswith("//") or k.startswith("#"):
+            # 保留注释行
+            merged[k] = v
+        elif k in user:
+            merged[k] = user[k]
+        else:
+            # example 中新增的字段，使用 example 的默认值
+            merged[k] = v
+
+    # 追加用户 config.json 中存在但 example 中没有的键
+    for k, v in user_raw.items():
+        if k not in merged:
+            merged[k] = v
+
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=4, ensure_ascii=False)
+        print(f"[config] 已自动合并 {len(new_keys)} 个新增配置项: {', '.join(new_keys)}")
+    except Exception as e:
+        print(f"[config] 合并配置失败: {e}")
+
+
 def load_config():
     load_env()
+    # 每次加载前自动合并 config.example.json 中的新增字段
+    merge_config_with_example()
     global config
     if os.path.exists(CONFIG_FILE):
         try:

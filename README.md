@@ -97,6 +97,8 @@ cp config.example.json config.json
 2. **每个字段含义见 `config.example.json` 内注释键**，勿删示例里的 `//_readme` 段。  
    运行时读取的是 `config.json`（可同样使用 `//` 注释键）。
 
+3. **配置自动合并**：每次程序启动（或 Docker 重建）时，如果 `config.json` 已存在，会自动将 `config.example.json` 中新增的配置项合并进来——保留你已自定义的值，只补充新字段，不删除任何已有键。合并后会在日志中打印 `[config] 已自动合并 N 个新增配置项`。
+
 ### 代理优先级（重要）
 
 | 字段 | 作用 |

@@ -28,6 +28,9 @@ fi
 
 if [ ! -f config.json ]; then
     cp config.example.json config.json
+else
+    # 已有 config.json：容器启动时会自动 merge config.example.json 中的新增字段
+    echo "检测到已有 config.json，将在容器启动时自动合并新增配置项..."
 fi
 
 touch accounts_cli.txt emails_used.txt emails_error.txt

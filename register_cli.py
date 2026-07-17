@@ -207,7 +207,7 @@ def register_one(
         log(worker_id, f"! 浏览器启动失败: {exc}")
         return None
 
-    reg.start_interval_screenshot(worker_id)
+    reg.start_interval_screenshot(worker_id, browser=reg.TabPool.get_browser())
     for mail_try in range(1, max_mail_retry + 1):
         try:
             log(worker_id, f"--- 第 {idx}/{total} 个账号, 邮箱尝试 {mail_try}/{max_mail_retry} ---")

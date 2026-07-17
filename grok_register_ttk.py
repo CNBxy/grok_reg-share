@@ -216,37 +216,61 @@ def take_error_screenshot(page, tag: str = ""):
 
 _screenshot_thread = None
 _screenshot_stop = threading.Event()
+# 注册线程的 browser 引用（跨线程截图用，不经过 TabPool 的 thread_local）
+_screenshot_browser = None
 
 
-def start_interval_screenshot(worker_id: int | str = ""):
+def start_interval_screenshot(worker_id: int | str = "", browser=None):
     """启动后台线程，每 0.1s 截图一张到 screenshots/ 目录。
 
     受 config.screenshot_interval 开关控制。关闭时调用无效果。
     每个账号注册开始时调用 start，结束时调用 stop。
+
+    browser: 注册线程的 Chromium browser 对象。截图线程通过它直接获取最新 tab，
+            避免跨线程访问 TabPool 的 thread_local（会误创建新浏览器）。
     """
-    global _screenshot_thread, _screenshot_stop
+    global _screenshot_thread, _screenshot_stop, _screenshot_browser
     if not config.get("screenshot_interval"):
         return
     stop_interval_screenshot()
     _screenshot_stop.clear()
+    # 优先用传入的 browser，否则尝试从当前线程 TabPool 获取
+    if browser is None:
+        browser = TabPool.get_browser()
+    _screenshot_browser = browser
     wid = str(worker_id)
 
     def _loop():
         import itertools
         counter = itertools.count()
+        ss_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
+        os.makedirs(ss_dir, exist_ok=True)
+        print(f"[screenshot] 流程截图已启动 (worker={wid}, browser={'有' if _screenshot_browser else '无'})", flush=True)
+        err_count = 0
         while not _screenshot_stop.is_set():
             try:
-                page = _get_page()
-                if page is None:
+                browser_ref = _screenshot_browser
+                if browser_ref is None:
                     _screenshot_stop.wait(0.1)
                     continue
-                os.makedirs(_SCREENSHOT_DIR, exist_ok=True)
+                # 通过 browser 直接获取最新 tab（跨线程安全，只读截图）
+                tab_ids = browser_ref.tab_ids
+                if not tab_ids:
+                    _screenshot_stop.wait(0.1)
+                    continue
+                tab = browser_ref.get_tab(tab_ids[-1])
+                if tab is None:
+                    _screenshot_stop.wait(0.1)
+                    continue
                 seq = next(counter)
                 ts = datetime.datetime.now().strftime("%H%M%S")
-                path = os.path.join(_SCREENSHOT_DIR, f"flow_{wid}_{ts}_{seq:05d}.png")
-                page.get_screenshot(path=path)
-            except Exception:
-                pass
+                path = os.path.join(ss_dir, f"flow_{wid}_{ts}_{seq:05d}.png")
+                tab.get_screenshot(path=path)
+                err_count = 0  # 成功后重置错误计数
+            except Exception as e:
+                err_count += 1
+                if err_count <= 3:
+                    print(f"[screenshot] 截图异常: {e}", flush=True)
             _screenshot_stop.wait(0.1)
 
     _screenshot_thread = threading.Thread(target=_loop, daemon=True, name=f"sshot-{wid}")
@@ -255,12 +279,13 @@ def start_interval_screenshot(worker_id: int | str = ""):
 
 def stop_interval_screenshot():
     """停止流程定时截图线程。"""
-    global _screenshot_thread, _screenshot_stop
+    global _screenshot_thread, _screenshot_stop, _screenshot_browser
     if _screenshot_thread is None:
         return
     _screenshot_stop.set()
     _screenshot_thread.join(timeout=2)
     _screenshot_thread = None
+    _screenshot_browser = None
 
 
 # ── 超时守卫 ──
@@ -3666,7 +3691,7 @@ class GrokRegisterGUI:
         code = ""
         mail_ok = False
         max_mail_retry = 3
-        start_interval_screenshot(idx)
+        start_interval_screenshot(idx, browser=TabPool.get_browser())
         try:
             for mail_try in range(1, max_mail_retry + 1):
                 logf(f"[*] 1. 打开注册页 (尝试 {mail_try}/{max_mail_retry})")

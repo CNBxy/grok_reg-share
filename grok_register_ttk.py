@@ -1787,7 +1787,7 @@ def get_oai_code(
 
 def extract_verification_code(text, subject=""):
     if subject:
-        match = re.search(r"^([A-Z0-9]{3}-[A-Z0-9]{3})\s+xAI", subject, re.IGNORECASE)
+        match = re.search(r"([A-Z0-9]{3}-[A-Z0-9]{3})", subject, re.IGNORECASE)
         if match:
             return match.group(1)
     match = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", text, re.IGNORECASE)

@@ -85,10 +85,14 @@ def add_security_headers(response):
 _log_listeners: list[queue.Queue] = []
 _log_lock = threading.Lock()
 _log_history: list[dict] = []
+_log_seq = 0
 MAX_HISTORY = 500
 
 def _broadcast(entry: dict):
+    global _log_seq
     with _log_lock:
+        _log_seq += 1
+        entry["seq"] = _log_seq
         _log_history.append(entry)
         if len(_log_history) > MAX_HISTORY:
             _log_history.pop(0)

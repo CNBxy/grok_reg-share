@@ -323,6 +323,8 @@ pollStatus();
 // SSE logs
 let evtSource = null;
 let allLogLines = [];
+let _lastSeq = 0;
+let _reconnectTimer = null;
 function connectSSE() {
   if (evtSource) evtSource.close();
   evtSource = new EventSource('/api/logs/stream');
@@ -330,13 +332,20 @@ function connectSSE() {
     try {
       const d = JSON.parse(e.data);
       if (d.msg === '__DONE__') { pollStatus(); loadAccounts(); return; }
+      if (d.seq && d.seq <= _lastSeq) return;
+      if (d.seq) _lastSeq = d.seq;
       allLogLines.push(d);
       if (allLogLines.length > 1000) allLogLines.shift();
       appendLogLine(d);
     } catch(ex) {}
   };
   evtSource.onerror = () => {
-    setTimeout(connectSSE, 3000);
+    if (evtSource) evtSource.close();
+    if (_reconnectTimer) clearTimeout(_reconnectTimer);
+    _reconnectTimer = setTimeout(() => {
+      _reconnectTimer = null;
+      connectSSE();
+    }, 3000);
   };
 }
 connectSSE();

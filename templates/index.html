@@ -627,7 +627,8 @@ const CONFIG_SECTIONS = {
     "cloudmail_url", "cloudmail_admin_email", "cloudmail_password",
     "cloudflare_api_base", "cloudflare_api_key", "cloudflare_auth_mode",
     "cloudflare_path_domains", "cloudflare_path_accounts", "cloudflare_path_token", "cloudflare_path_messages",
-    "duckmail_api_key", "yyds_api_key", "yyds_jwt"
+  "duckmail_api_key", "yyds_api_key", "yyds_jwt",
+  "freemail_api_url", "freemail_api_token"
   ],
   "网络与浏览器": [
     "proxy", "cpa_proxy", "user_agent", "enable_nsfw"
@@ -675,6 +676,8 @@ const CONFIG_LABELS = {
   "duckmail_api_key": "DuckMail API 密钥",
   "yyds_api_key": "YYDS API 密钥",
   "yyds_jwt": "YYDS JWT 凭证",
+  "freemail_api_url": "FreeMail 服务端地址",
+  "freemail_api_token": "FreeMail API 密钥",
   "proxy": "注册主代理（可留空）",
   "cpa_proxy": "CPA/OIDC 专用代理（可留空）",
   "user_agent": "浏览器 User-Agent",
@@ -764,6 +767,23 @@ const PROVIDER_FIELDS = {
     "defaultDomains",
     "yyds_api_key",
     "yyds_jwt"
+  ],
+  "generator_email": [
+    "defaultDomains"
+  ],
+  "inboxes": [
+    "defaultDomains"
+  ],
+  "tempmail": [
+    "defaultDomains"
+  ],
+  "tempmail_org": [
+    "defaultDomains"
+  ],
+  "freemail": [
+    "defaultDomains",
+    "freemail_api_url",
+    "freemail_api_token"
   ]
 };
 
@@ -867,6 +887,11 @@ function createFieldMarkup(key, val, container) {
         <option value="cloudflare" ${v === 'cloudflare' ? 'selected' : ''}>Cloudflare Worker 临时邮箱</option>
         <option value="duckmail" ${v === 'duckmail' ? 'selected' : ''}>DuckMail</option>
         <option value="yyds" ${v === 'yyds' ? 'selected' : ''}>YYDS 邮箱</option>
+        <option value="generator_email" ${v === 'generator_email' ? 'selected' : ''}>Generator.email</option>
+        <option value="inboxes" ${v === 'inboxes' ? 'selected' : ''}>Inboxes.com</option>
+        <option value="tempmail" ${v === 'tempmail' ? 'selected' : ''}>Tempmail.lol</option>
+        <option value="tempmail_org" ${v === 'tempmail_org' ? 'selected' : ''}>TempMail.org</option>
+        <option value="freemail" ${v === 'freemail' ? 'selected' : ''}>FreeMail</option>
       </select>
     `;
   } else if (key === 'cloudflare_auth_mode') {

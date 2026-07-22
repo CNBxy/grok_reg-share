@@ -3,7 +3,7 @@
   "//_paths": "相对路径相对 grok_reg 目录；CPA 相关绝对路径更清晰。",
 
   "// ===== 邮箱：注册验证码来源 =====": "",
-  "// email_provider": "openai_cpa | cloudmail | cloudflare | duckmail | yyds。openai_cpa 为 Webhook 内存池模式。",
+  "// email_provider": "openai_cpa | cloudmail | cloudflare | duckmail | yyds | generator_email | inboxes | tempmail | tempmail_org | freemail。openai_cpa 为 Webhook 内存池模式。",
   "email_provider": "cloudmail",
   "// defaultDomains": "注册用邮箱域名，逗号分隔；cloudmail catch-all 域名写这里。",
   "defaultDomains": "example.com",
@@ -36,6 +36,10 @@
   "// yyds_api_key / yyds_jwt": "备用邮箱通道凭证",
   "yyds_api_key": "",
   "yyds_jwt": "",
+  "// freemail_api_url": "FreeMail 服务端地址",
+  "freemail_api_url": "",
+  "// freemail_api_token": "FreeMail API 认证密钥",
+  "freemail_api_token": "",
 
   "// ===== 网络 / 浏览器 =====": "",
   "// proxy": "注册机主代理：Chromium + 邮箱 HTTP。支持 http://, https://, socks5://, socks5h:// (远程DNS), socks4://。可带账号 http://user:pass@host:port。优先于系统 https_proxy。Docker 部署用 warp 容器时填 socks5://warp:1080。",

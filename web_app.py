@@ -578,6 +578,11 @@ def api_test_mail():
             "cloudflare": ["cloudflare_api_base"],
             "duckmail": ["duckmail_api_key"],
             "yyds": ["yyds_api_key"],
+            "generator_email": [],
+            "inboxes": [],
+            "tempmail": [],
+            "tempmail_org": [],
+            "freemail": ["freemail_api_url"],
         }.get(provider, [])
         missing = [k for k in required if not str(cfg.get(k) or "").strip()]
         if missing:

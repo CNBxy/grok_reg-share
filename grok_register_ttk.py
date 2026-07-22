@@ -1746,6 +1746,669 @@ def openai_cpa_get_oai_code(
     raise Exception(f"OpenAI-CPA 在 {timeout}s 内未从内存池或 CloudMail 回退收到验证码")
 
 
+# ──────────────────────── Generator.email ────────────────────────
+
+GENERATOR_EMAIL_BASE_URL = "https://generator.email"
+
+
+def generator_email_create_email():
+    """通过 generator.email 创建临时邮箱，返回 (email, surl)"""
+    from curl_cffi import requests as cf_requests
+    from curl_cffi import CurlHttpVersion
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    timeout = 30
+    proxy = config.get("proxy") or None
+
+    resp = cf_requests.get(
+        GENERATOR_EMAIL_BASE_URL,
+        headers=headers,
+        proxies={"https": proxy, "http": proxy} if proxy else None,
+        timeout=timeout,
+        impersonate="chrome110",
+        http_version=CurlHttpVersion.V1_1,
+    )
+    if resp.status_code != 200:
+        raise Exception(f"GeneratorEmail 获取页面失败 (HTTP {resp.status_code})")
+
+    html = resp.text or ""
+    # 解析邮箱地址
+    match = re.search(r'id="email_ch_text"[^>]*>([^<]+)</span>', html, re.I)
+    if not match:
+        match = re.search(r'id="email_ch_text"[^>]*>([^<]+)<', html, re.I)
+    if match:
+        email = match.group(1).strip()
+    else:
+        user_match = re.search(r'id="userName"[^>]*value="([^"]+)"', html, re.I)
+        domain_match = re.search(r'id="domainName2"[^>]*value="([^"]+)"', html, re.I)
+        if user_match and domain_match:
+            email = f"{user_match.group(1).strip()}@{domain_match.group(1).strip()}"
+        else:
+            raise Exception("GeneratorEmail 无法从页面解析邮箱地址")
+
+    # 构造 surl (session URL)
+    username, domain = email.split("@", 1)
+    safe_user = re.sub(r"[^a-zA-Z_0-9.-]", "", username).lower()
+    surl = f"{domain.lower()}/{safe_user}"
+    return email, surl
+
+
+def generator_email_get_inbox_links(surl):
+    """获取 generator.email 收件箱中的邮件链接列表"""
+    from curl_cffi import requests as cf_requests
+    from curl_cffi import CurlHttpVersion
+
+    if not surl:
+        return []
+
+    mailbox_url = f"{GENERATOR_EMAIL_BASE_URL}/{surl.lstrip('/')}"
+    cookies = {"surl": surl}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    proxy = config.get("proxy") or None
+
+    resp = cf_requests.get(
+        mailbox_url,
+        headers=headers,
+        cookies=cookies,
+        proxies={"https": proxy, "http": proxy} if proxy else None,
+        timeout=30,
+        impersonate="chrome110",
+        http_version=CurlHttpVersion.V1_1,
+    )
+    if resp.status_code != 200:
+        return []
+
+    html = resp.text or ""
+    pattern = r'<a href="([^"]+)"[^>]*>([\s\S]*?)</a>'
+    links = re.findall(pattern, html)
+    results = []
+    for href, _inner_html in links:
+        m_id = href.split("/")[-1]
+        results.append({"href": href, "id": m_id})
+    return results
+
+
+def generator_email_get_code_from_detail(href, surl):
+    """从 generator.email 邮件详情页提取验证码"""
+    from curl_cffi import requests as cf_requests
+    from curl_cffi import CurlHttpVersion
+
+    if not href:
+        return None
+
+    detail_url = (
+        f"{GENERATOR_EMAIL_BASE_URL}/{href.lstrip('/')}"
+        if not href.startswith("http")
+        else href
+    )
+    cookies = {"surl": surl}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    proxy = config.get("proxy") or None
+
+    resp = cf_requests.get(
+        detail_url,
+        headers=headers,
+        cookies=cookies,
+        proxies={"https": proxy, "http": proxy} if proxy else None,
+        timeout=30,
+        impersonate="chrome110",
+        http_version=CurlHttpVersion.V1_1,
+    )
+    if resp.status_code != 200:
+        return None
+
+    raw_html = resp.text or ""
+    # 清理 HTML 并提取文本
+    clean_text = re.sub(r"<[^>]+>", " ", raw_html)
+    clean_text = re.sub(r"\s+", " ", clean_text).strip()
+    return extract_verification_code(clean_text)
+
+
+def generator_email_get_email_and_token():
+    """generator.email 创建邮箱入口"""
+    email, surl = generator_email_create_email()
+    if not email or not surl:
+        raise Exception("GeneratorEmail 创建邮箱失败")
+    print(f"[*] 已创建 GeneratorEmail 邮箱: {email}")
+    return email, surl
+
+
+def generator_email_get_oai_code(
+    dev_token,
+    email,
+    timeout=180,
+    poll_interval=3,
+    log_callback=None,
+    cancel_callback=None,
+):
+    """generator.email 轮询验证码"""
+    deadline = time.time() + timeout
+    seen_ids = set()
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        try:
+            mail_links = generator_email_get_inbox_links(dev_token)
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"[Debug] GeneratorEmail 拉取邮件列表失败: {exc}")
+            sleep_with_cancel(poll_interval, cancel_callback)
+            continue
+        for item in mail_links:
+            m_id = item.get("id")
+            m_href = item.get("href")
+            if not m_id or m_id in seen_ids:
+                continue
+            seen_ids.add(m_id)
+            try:
+                code = generator_email_get_code_from_detail(m_href, dev_token)
+            except Exception as exc:
+                if log_callback:
+                    log_callback(f"[Debug] GeneratorEmail 获取邮件详情失败: {exc}")
+                continue
+            if code:
+                if log_callback:
+                    log_callback(f"[*] GeneratorEmail 从邮件中提取到验证码: {code}")
+                return code
+        sleep_with_cancel(poll_interval, cancel_callback)
+    raise Exception(f"GeneratorEmail 在 {timeout}s 内未收到验证码邮件")
+
+
+# ──────────────────────── Inboxes.com ────────────────────────
+
+INBOXES_API_BASE = "https://inboxes.com/api/v2"
+
+
+def inboxes_com_create_email():
+    """创建 Inboxes.com 邮箱，返回 (email, user_id)"""
+    from curl_cffi import requests as cf_requests
+
+    session = cf_requests.Session(impersonate="chrome120")
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "origin": "https://inboxes.com",
+        "referer": "https://inboxes.com/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    }
+    proxy = config.get("proxy") or None
+    if proxy:
+        session.proxies = {"http": proxy, "https": proxy}
+
+    resp = session.post(f"{INBOXES_API_BASE}/inbox", headers=headers, json={}, timeout=15)
+    if resp.status_code == 200:
+        data = resp.json()
+        email = data.get("inbox")
+        user_id = session.cookies.get_dict().get("user_id")
+        if email and user_id:
+            return email, user_id
+    raise Exception(f"Inboxes.com 创建邮箱失败 (HTTP {resp.status_code})")
+
+
+def inboxes_com_get_inbox(email_address, user_id):
+    """获取 Inboxes.com 收件箱"""
+    from curl_cffi import requests as cf_requests
+
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    }
+    cookies = {"user_id": user_id}
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    resp = cf_requests.get(
+        f"{INBOXES_API_BASE}/inbox/{email_address}",
+        headers=headers, cookies=cookies, proxies=proxies, timeout=10,
+        impersonate="chrome120",
+    )
+    if resp.status_code == 200:
+        return resp.json().get("msgs", [])
+    return []
+
+
+def inboxes_com_get_message_body(uid, user_id):
+    """获取 Inboxes.com 邮件正文"""
+    from curl_cffi import requests as cf_requests
+
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    }
+    cookies = {"user_id": user_id}
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    resp = cf_requests.get(
+        f"https://inboxes.com/read/{uid}",
+        headers=headers, cookies=cookies, proxies=proxies, timeout=10,
+        impersonate="chrome120",
+    )
+    if resp.status_code == 200:
+        return resp.text
+    return ""
+
+
+def inboxes_com_get_email_and_token():
+    """Inboxes.com 创建邮箱入口"""
+    email, user_id = inboxes_com_create_email()
+    if not email or not user_id:
+        raise Exception("Inboxes.com 创建邮箱失败")
+    print(f"[*] 已创建 Inboxes.com 邮箱: {email}")
+    return email, user_id
+
+
+def inboxes_com_get_oai_code(
+    dev_token,
+    email,
+    timeout=180,
+    poll_interval=3,
+    log_callback=None,
+    cancel_callback=None,
+):
+    """Inboxes.com 轮询验证码"""
+    deadline = time.time() + timeout
+    seen_ids = set()
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        try:
+            msgs = inboxes_com_get_inbox(email, dev_token)
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"[Debug] Inboxes.com 拉取邮件列表失败: {exc}")
+            sleep_with_cancel(poll_interval, cancel_callback)
+            continue
+        for m in msgs:
+            m_id = str(m.get("uid", ""))
+            if not m_id or m_id in seen_ids:
+                continue
+            seen_ids.add(m_id)
+            subject = str(m.get("s", ""))
+            sender = str(m.get("f", "")).lower()
+            if "openai" not in sender and "openai" not in subject.lower() and "chatgpt" not in subject.lower():
+                continue
+            try:
+                raw_body = inboxes_com_get_message_body(m_id, user_id=dev_token)
+                clean_body = re.sub(r"<[^>]+>", " ", raw_body)
+                clean_body = re.sub(r"\s+", " ", clean_body).strip()
+                combined_text = subject + " \n " + clean_body
+            except Exception as exc:
+                if log_callback:
+                    log_callback(f"[Debug] Inboxes.com 获取邮件详情失败: {exc}")
+                continue
+            code = extract_verification_code(combined_text, subject)
+            if code:
+                if log_callback:
+                    log_callback(f"[*] Inboxes.com 从邮件中提取到验证码: {code}")
+                return code
+        sleep_with_cancel(poll_interval, cancel_callback)
+    raise Exception(f"Inboxes.com 在 {timeout}s 内未收到验证码邮件")
+
+
+# ──────────────────────── Tempmail.lol ────────────────────────
+
+TEMPMAIL_LOL_API_BASE = "https://api.tempmail.lol/v2"
+
+
+def tempmail_lol_create_email():
+    """创建 Tempmail.lol 邮箱，返回 (email, token)"""
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    resp = cf_requests.post(
+        f"{TEMPMAIL_LOL_API_BASE}/inbox/create",
+        headers={"Accept": "application/json"},
+        json=None,
+        proxies=proxies,
+        timeout=15,
+        impersonate="chrome110",
+    )
+    if resp.status_code in (200, 201):
+        data = resp.json()
+        email = str(data.get("address", "")).strip()
+        token = str(data.get("token", "")).strip()
+        if email and token:
+            return email, token
+    raise Exception(f"Tempmail.lol 创建邮箱失败 (HTTP {resp.status_code})")
+
+
+def tempmail_lol_get_inbox(token):
+    """获取 Tempmail.lol 收件箱"""
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    resp = cf_requests.get(
+        f"{TEMPMAIL_LOL_API_BASE}/inbox",
+        params={"token": token},
+        headers={"Accept": "application/json"},
+        proxies=proxies,
+        timeout=15,
+        impersonate="chrome110",
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        if isinstance(data, dict):
+            return data.get("emails", [])
+    return []
+
+
+def tempmail_lol_get_email_and_token():
+    """Tempmail.lol 创建邮箱入口"""
+    email, token = tempmail_lol_create_email()
+    if not email or not token:
+        raise Exception("Tempmail.lol 创建邮箱失败")
+    print(f"[*] 已创建 Tempmail.lol 邮箱: {email}")
+    return email, token
+
+
+def tempmail_lol_get_oai_code(
+    dev_token,
+    email,
+    timeout=180,
+    poll_interval=3,
+    log_callback=None,
+    cancel_callback=None,
+):
+    """Tempmail.lol 轮询验证码"""
+    deadline = time.time() + timeout
+    seen_ids = set()
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        try:
+            email_list = tempmail_lol_get_inbox(dev_token)
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"[Debug] Tempmail.lol 拉取邮件列表失败: {exc}")
+            sleep_with_cancel(poll_interval, cancel_callback)
+            continue
+        for msg in email_list:
+            msg_date = str(msg.get("date", 0))
+            if not msg_date or msg_date in seen_ids:
+                continue
+            seen_ids.add(msg_date)
+            sender = str(msg.get("from", "")).lower()
+            subject = str(msg.get("subject", ""))
+            body = str(msg.get("body", ""))
+            html = re.sub(r"<[^>]+>", " ", str(msg.get("html") or ""))
+            content = "\n".join([sender, subject, body, html])
+            if "openai" not in sender and "openai" not in content.lower():
+                continue
+            code = extract_verification_code(content, subject)
+            if code:
+                if log_callback:
+                    log_callback(f"[*] Tempmail.lol 从邮件中提取到验证码: {code}")
+                return code
+        sleep_with_cancel(poll_interval, cancel_callback)
+    raise Exception(f"Tempmail.lol 在 {timeout}s 内未收到验证码邮件")
+
+
+# ──────────────────────── TempMail.org ────────────────────────
+
+TEMPMAIL_ORG_BASE = "https://web2.temp-mail.org"
+
+
+def tempmail_org_create_email():
+    """创建 TempMail.org 邮箱，返回 (email, token)"""
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    session = cf_requests.Session(impersonate="chrome110")
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://web2.temp-mail.org",
+        "Referer": "https://web2.temp-mail.org",
+    })
+    if proxies:
+        session.proxies.update(proxies)
+
+    resp = session.post(f"{TEMPMAIL_ORG_BASE}/mailbox", timeout=15)
+    if resp.status_code == 200:
+        data = resp.json()
+        return data.get("mailbox"), data.get("token")
+    raise Exception(f"TempMail.org 创建邮箱失败 (HTTP {resp.status_code})")
+
+
+def tempmail_org_get_inbox(token):
+    """获取 TempMail.org 收件箱"""
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    resp = cf_requests.get(
+        f"{TEMPMAIL_ORG_BASE}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+        proxies=proxies,
+        timeout=30,
+        impersonate="chrome110",
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        return data.get("messages", [])
+    return []
+
+
+def tempmail_org_get_email_and_token():
+    """TempMail.org 创建邮箱入口"""
+    email, token = tempmail_org_create_email()
+    if not email or not token:
+        raise Exception("TempMail.org 创建邮箱失败")
+    print(f"[*] 已创建 TempMail.org 邮箱: {email}")
+    return email, token
+
+
+def tempmail_org_get_oai_code(
+    dev_token,
+    email,
+    timeout=180,
+    poll_interval=3,
+    log_callback=None,
+    cancel_callback=None,
+):
+    """TempMail.org 轮询验证码"""
+    deadline = time.time() + timeout
+    seen_ids = set()
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        try:
+            email_list = tempmail_org_get_inbox(dev_token)
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"[Debug] TempMail.org 拉取邮件列表失败: {exc}")
+            sleep_with_cancel(poll_interval, cancel_callback)
+            continue
+        for msg in email_list:
+            msg_id = str(msg.get("_id", msg.get("id", "")))
+            if not msg_id or msg_id in seen_ids:
+                continue
+            seen_ids.add(msg_id)
+            subject = str(msg.get("subject", ""))
+            body_preview = str(msg.get("bodyPreview", ""))
+            content = "\n".join([subject, body_preview])
+            code = extract_verification_code(content, subject)
+            if code:
+                if log_callback:
+                    log_callback(f"[*] TempMail.org 从邮件中提取到验证码: {code}")
+                return code
+        sleep_with_cancel(poll_interval, cancel_callback)
+    raise Exception(f"TempMail.org 在 {timeout}s 内未收到验证码邮件")
+
+
+# ──────────────────────── FreeMail ────────────────────────
+
+def freemail_get_api_url():
+    return str(config.get("freemail_api_url", "") or "").rstrip("/")
+
+
+def freemail_get_api_token():
+    return str(config.get("freemail_api_token", "") or "")
+
+
+def freemail_create_email():
+    """通过 FreeMail API 创建邮箱，返回 (email, "")"""
+    api_url = freemail_get_api_url()
+    api_token = freemail_get_api_token()
+    if not api_url:
+        raise Exception("FreeMail API URL 未配置 (freemail_api_url)")
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    headers = {"Content-Type": "application/json"}
+    if api_token:
+        headers["Authorization"] = f"Bearer {api_token}"
+
+    # FreeMail 使用 defaultDomains 生成随机邮箱
+    raw = str(config.get("defaultDomains", "") or "")
+    domains = [x.strip() for x in re.split(r"[,，\s]+", raw) if x.strip()]
+    if not domains:
+        raise Exception("FreeMail 需要在 defaultDomains 中配置可用域名")
+    global _cf_domain_index
+    domain = domains[_cf_domain_index % len(domains)]
+    _cf_domain_index += 1
+    username = generate_username(10)
+    email = f"{username}@{domain}"
+
+    resp = cf_requests.post(
+        f"{api_url}/api/create",
+        json={"email": email},
+        headers=headers,
+        proxies=proxies,
+        timeout=15,
+        impersonate="chrome110",
+    )
+    resp.raise_for_status()
+    return email, ""
+
+
+def freemail_get_inbox(email_address):
+    """获取 FreeMail 收件箱"""
+    api_url = freemail_get_api_url()
+    api_token = freemail_get_api_token()
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    headers = {"Content-Type": "application/json"}
+    if api_token:
+        headers["Authorization"] = f"Bearer {api_token}"
+
+    resp = cf_requests.get(
+        f"{api_url}/api/emails",
+        params={"mailbox": email_address, "limit": 20},
+        headers=headers,
+        proxies=proxies,
+        timeout=15,
+        impersonate="chrome110",
+    )
+    if resp.status_code == 200:
+        raw_data = resp.json()
+        emails_list = (
+            raw_data.get("data") or raw_data.get("emails")
+            or raw_data.get("messages") or raw_data.get("results") or []
+            if isinstance(raw_data, dict) else raw_data
+        )
+        if isinstance(emails_list, list):
+            return emails_list
+    return []
+
+
+def freemail_get_email_detail(mail_id):
+    """获取 FreeMail 邮件详情"""
+    api_url = freemail_get_api_url()
+    api_token = freemail_get_api_token()
+    from curl_cffi import requests as cf_requests
+
+    proxy = config.get("proxy") or None
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    headers = {"Content-Type": "application/json"}
+    if api_token:
+        headers["Authorization"] = f"Bearer {api_token}"
+
+    resp = cf_requests.get(
+        f"{api_url}/api/email/{mail_id}",
+        headers=headers,
+        proxies=proxies,
+        timeout=15,
+        impersonate="chrome110",
+    )
+    if resp.status_code == 200:
+        return resp.json()
+    return None
+
+
+def freemail_get_email_and_token():
+    """FreeMail 创建邮箱入口"""
+    email, token = freemail_create_email()
+    if not email:
+        raise Exception("FreeMail 创建邮箱失败")
+    print(f"[*] 已创建 FreeMail 邮箱: {email}")
+    return email, token
+
+
+def freemail_get_oai_code(
+    dev_token,
+    email,
+    timeout=180,
+    poll_interval=3,
+    log_callback=None,
+    cancel_callback=None,
+):
+    """FreeMail 轮询验证码"""
+    deadline = time.time() + timeout
+    seen_ids = set()
+    while time.time() < deadline:
+        raise_if_cancelled(cancel_callback)
+        try:
+            emails_list = freemail_get_inbox(email)
+        except Exception as exc:
+            if log_callback:
+                log_callback(f"[Debug] FreeMail 拉取邮件列表失败: {exc}")
+            sleep_with_cancel(poll_interval, cancel_callback)
+            continue
+        for mail in emails_list:
+            mail_id = str(mail.get("id") or mail.get("timestamp") or mail.get("subject") or "")
+            if not mail_id or mail_id in seen_ids:
+                continue
+            seen_ids.add(mail_id)
+            subject_text = str(mail.get("subject") or mail.get("title") or "")
+            code = extract_verification_code(subject_text)
+            if not code:
+                code = str(mail.get("code") or mail.get("verification_code") or "")
+            if not code:
+                try:
+                    detail = freemail_get_email_detail(mail_id)
+                    if detail:
+                        detail_content = "\n".join(filter(None, [
+                            str(detail.get("subject") or ""),
+                            str(detail.get("content") or ""),
+                            re.sub(r"<[^>]+>", " ", str(detail.get("html_content") or "")),
+                        ]))
+                        code = extract_verification_code(detail_content)
+                except Exception:
+                    pass
+            if code:
+                if log_callback:
+                    log_callback(f"[*] FreeMail 从邮件中提取到验证码: {code}")
+                return code
+        sleep_with_cancel(poll_interval, cancel_callback)
+    raise Exception(f"FreeMail 在 {timeout}s 内未收到验证码邮件")
+
+
 # ──────────────────────── 公共邮箱工具 ────────────────────────
 
 def get_email_provider():
@@ -1802,6 +2465,16 @@ def get_email_and_token(api_key=None):
             if not token:
                 raise Exception("获取 Cloudflare 邮箱 token 失败")
             return address, token
+    if provider == "generator_email":
+        return generator_email_get_email_and_token()
+    if provider == "inboxes":
+        return inboxes_com_get_email_and_token()
+    if provider == "tempmail":
+        return tempmail_lol_get_email_and_token()
+    if provider == "tempmail_org":
+        return tempmail_org_get_email_and_token()
+    if provider == "freemail":
+        return freemail_get_email_and_token()
     key = api_key or get_duckmail_api_key()
     domain = pick_domain(api_key=key)
     username = generate_username(10)
@@ -1863,6 +2536,51 @@ def get_oai_code(
             log_callback=log_callback,
             cancel_callback=cancel_callback,
             resend_callback=resend_callback,
+        )
+    if provider == "generator_email":
+        return generator_email_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+        )
+    if provider == "inboxes":
+        return inboxes_com_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+        )
+    if provider == "tempmail":
+        return tempmail_lol_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+        )
+    if provider == "tempmail_org":
+        return tempmail_org_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
+        )
+    if provider == "freemail":
+        return freemail_get_oai_code(
+            dev_token,
+            email,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
         )
     return duckmail_get_oai_code(
         dev_token,

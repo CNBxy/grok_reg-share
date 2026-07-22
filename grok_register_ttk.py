@@ -2438,8 +2438,11 @@ def catchmail_get_inbox(email_address):
         impersonate="chrome110",
     )
     if resp.status_code == 200:
-        data = resp.json()
-        return data.get("messages", [])
+        try:
+            data = resp.json()
+            return data.get("messages", [])
+        except Exception:
+            return []
     return []
 
 
@@ -2459,7 +2462,10 @@ def catchmail_get_message_detail(message_id, mailbox):
         impersonate="chrome110",
     )
     if resp.status_code == 200:
-        return resp.json()
+        try:
+            return resp.json()
+        except Exception:
+            return None
     return None
 
 
@@ -2487,6 +2493,8 @@ def catchmail_get_oai_code(
         raise_if_cancelled(cancel_callback)
         try:
             messages = catchmail_get_inbox(email)
+            if log_callback:
+                log_callback(f"[Debug] Catchmail.io 检查收件箱 {email}，返回 {len(messages)} 封邮件")
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] Catchmail.io 拉取邮件列表失败: {exc}")
@@ -2500,6 +2508,8 @@ def catchmail_get_oai_code(
             sender = str(msg.get("from", "")).lower()
             subject = str(msg.get("subject", ""))
             combined = f"{sender}\n{subject}"
+            if log_callback:
+                log_callback(f"[Debug] Catchmail.io 发现邮件: id={msg_id}, from={sender}, subject={subject}")
             if "openai" not in combined.lower():
                 continue
             code = extract_verification_code(combined, subject)
@@ -3554,7 +3564,7 @@ def fill_email_and_submit(timeout=None, log_callback=None, cancel_callback=None)
     if timeout is None:
         timeout = int(config.get("email_form_timeout", 20))
     email, dev_token = get_email_and_token()
-    if not email or not dev_token:
+    if not email:
         raise Exception("获取邮箱失败")
     if log_callback:
         log_callback(f"[*] 已创建邮箱: {email}")

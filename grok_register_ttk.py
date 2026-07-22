@@ -2588,8 +2588,11 @@ def guerrilla_check_email(session_token):
         impersonate="chrome110",
     )
     if resp.status_code == 200:
-        data = resp.json()
-        return data.get("list", [])
+        try:
+            data = resp.json()
+            return data.get("list", [])
+        except Exception:
+            return []
     return []
 
 
@@ -2636,6 +2639,8 @@ def guerrilla_get_oai_code(
         raise_if_cancelled(cancel_callback)
         try:
             email_list = guerrilla_check_email(dev_token)
+            if log_callback:
+                log_callback(f"[Debug] Guerrilla Mail 检查收件箱，返回 {len(email_list)} 封邮件")
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] Guerrilla Mail 拉取邮件列表失败: {exc}")
@@ -2649,6 +2654,8 @@ def guerrilla_get_oai_code(
             sender = str(msg.get("mail_from", "")).lower()
             subject = str(msg.get("mail_subject", ""))
             combined = f"{sender}\n{subject}"
+            if log_callback:
+                log_callback(f"[Debug] Guerrilla Mail 发现邮件: from={sender}, subject={subject}")
             if "openai" not in combined.lower():
                 continue
             code = extract_verification_code(combined, subject)

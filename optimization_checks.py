@@ -88,15 +88,13 @@ def check_multi_thread() -> bool:
     return has_threading and has_queue
 
 
-# ── 6. NSFW（grok2api auto_nsfw） ──
+# ── 6. NSFW（grok2api enable_nsfw） ──
 
 @check("nsfw-enabled")
 def check_nsfw() -> bool:
-    """grok2api 调用含 auto_nsfw=true + NSFW 函数定义存在"""
+    """grok2api_enable_nsfw 函数存在（通过 grok2api 开启 NSFW）"""
     gtk = _source("grok_register_ttk.py")
-    nsfw_defs = "set_tos_accepted" in gtk and "set_birth_date" in gtk
-    has_auto_nsfw = "auto_nsfw" in gtk
-    return nsfw_defs and has_auto_nsfw
+    return "grok2api_enable_nsfw" in gtk
 
 
 # ── 7. gc 每200换 browser ──

@@ -288,7 +288,7 @@ def register_one(
                 pass
         try:
             reg.add_token_to_grok2api_pools(
-                sso, email=email, log_callback=lambda m: log(worker_id, m)
+                sso, email=email, log_callback=lambda m: log(worker_id, m), sync=True
             )
         except Exception as exc:
             log(worker_id, f"[Debug] grok2api: {exc}")

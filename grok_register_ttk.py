@@ -694,6 +694,89 @@ def _grok2api_push_import(body, provider_path, mgmt_key, base_url, log_callback,
     return False
 
 
+def _grok2api_find_account_id(email, base_url, mgmt_key, log_callback=None, retries=3, retry_delay=2):
+    """Query grok2api accounts list to find a web account ID by email."""
+    if not email:
+        return None
+    headers = {}
+    if mgmt_key:
+        headers["Authorization"] = f"Bearer {mgmt_key}"
+    url = f"{base_url}/api/admin/v1/accounts"
+    params = {"search": email, "provider": "web", "pageSize": 5}
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = http_get(url, headers=headers, params=params, timeout=15, proxies={})
+            if resp.status_code == 401:
+                if log_callback:
+                    log_callback("[grok2api] 查询账号认证失败")
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("data", {}).get("items", [])
+            email_lower = email.lower()
+            for item in items:
+                if (item.get("email") or "").lower() == email_lower:
+                    account_id = item.get("id")
+                    if account_id:
+                        if log_callback:
+                            log_callback(f"[grok2api] 找到账号 ID: {account_id} ({email})")
+                        return int(account_id)
+            if log_callback:
+                log_callback(f"[grok2api] 未找到匹配 email 的 web 账号: {email}")
+            return None
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(retry_delay)
+    if log_callback:
+        log_callback(f"[grok2api] 查询账号失败({retries}次): {last_exc}")
+    return None
+
+
+def _grok2api_enable_nsfw(account_id, base_url, mgmt_key, log_callback=None, retries=3, retry_delay=2):
+    """Call grok2api to enable NSFW for a web account (accept terms + set birthday + enable NSFW)."""
+    headers = {"Content-Type": "application/json"}
+    if mgmt_key:
+        headers["Authorization"] = f"Bearer {mgmt_key}"
+    url = f"{base_url}/api/admin/v1/accounts/web/{account_id}/nsfw"
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = http_post(url, headers=headers, timeout=60, proxies={})
+            if resp.status_code == 401:
+                if log_callback:
+                    log_callback("[grok2api] NSFW 认证失败")
+                return False
+            resp.raise_for_status()
+            if log_callback:
+                log_callback(f"[grok2api] NSFW 开启成功 (account_id={account_id})")
+            return True
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(retry_delay)
+    if log_callback:
+        log_callback(f"[grok2api] NSFW 开启失败({retries}次, account_id={account_id}): {last_exc}")
+    return False
+
+
+def grok2api_enable_nsfw(email, base_url, mgmt_key, log_callback=None):
+    """Find web account by email and enable NSFW (sync, must return result)."""
+    if not config.get("enable_nsfw", True):
+        return
+    if not email:
+        if log_callback:
+            log_callback("[grok2api] enable_nsfw 跳过: 无 email")
+        return
+    retries = int(config.get("grok2api_import_retries", 3))
+    retry_delay = float(config.get("grok2api_import_retry_delay", 2))
+    account_id = _grok2api_find_account_id(email, base_url, mgmt_key, log_callback, retries, retry_delay)
+    if not account_id:
+        return
+    _grok2api_enable_nsfw(account_id, base_url, mgmt_key, log_callback, retries, retry_delay)
+
+
 def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
     """Push SSO to grok2api Grok Web & Grok Console via import API (从画面中导入账号 流程)."""
     token = _normalize_sso_token(raw_token)
@@ -706,7 +789,7 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
             log_callback("[Debug] grok2api_import_base 未配置，跳过远程导入")
         return False
 
-    _grok2api_push_import(
+    web_ok = _grok2api_push_import(
         body=token,
         provider_path="web",
         mgmt_key=mgmt_key,
@@ -724,6 +807,8 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
         retries=int(config.get("grok2api_import_retries", 3)),
         retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
     )
+    if web_ok and email:
+        grok2api_enable_nsfw(email, base, mgmt_key, log_callback)
     return True
 
 
@@ -743,9 +828,9 @@ def _add_token_to_grok2api_pools_sync(raw_token, email="", log_callback=None):
                 log_callback(f"[Debug] 写入 grok2api 导入失败: {exc}")
 
 
-def add_token_to_grok2api_pools(raw_token, email="", log_callback=None):
-    """Push SSO into grok2api pools. Async by default so register path never blocks on dead target."""
-    if PERF_FLAGS.get("async_side_effects", True):
+def add_token_to_grok2api_pools(raw_token, email="", log_callback=None, sync=False):
+    """Push SSO into grok2api pools. sync=True forces synchronous execution (import + NSFW)."""
+    if not sync and PERF_FLAGS.get("async_side_effects", True):
         def _job():
             try:
                 _add_token_to_grok2api_pools_sync(raw_token, email=email, log_callback=log_callback)

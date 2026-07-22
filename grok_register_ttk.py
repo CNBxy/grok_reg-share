@@ -1838,6 +1838,7 @@ def generator_email_get_code_from_detail(href, surl):
     """从 generator.email 邮件详情页提取验证码"""
     from curl_cffi import requests as cf_requests
     from curl_cffi import CurlHttpVersion
+    from html import unescape
 
     if not href:
         return None
@@ -1867,8 +1868,9 @@ def generator_email_get_code_from_detail(href, surl):
         return None
 
     raw_html = resp.text or ""
-    # 清理 HTML 并提取文本
-    clean_text = re.sub(r"<[^>]+>", " ", raw_html)
+    clean_text = re.sub(r"(?is)<(style|script)[^>]*>.*?</\1>", " ", raw_html)
+    clean_text = re.sub(r"<[^>]+>", " ", clean_text)
+    clean_text = unescape(clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     return extract_verification_code(clean_text)
 
@@ -2014,12 +2016,15 @@ def inboxes_com_get_oai_code(
     cancel_callback=None,
 ):
     """Inboxes.com 轮询验证码"""
+    from html import unescape
     deadline = time.time() + timeout
     seen_ids = set()
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
         try:
             msgs = inboxes_com_get_inbox(email, dev_token)
+            if log_callback:
+                log_callback(f"[Debug] Inboxes.com 检查收件箱 {email}，返回 {len(msgs)} 封邮件")
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] Inboxes.com 拉取邮件列表失败: {exc}")
@@ -2032,11 +2037,15 @@ def inboxes_com_get_oai_code(
             seen_ids.add(m_id)
             subject = str(m.get("s", ""))
             sender = str(m.get("f", "")).lower()
+            if log_callback:
+                log_callback(f"[Debug] Inboxes.com 发现邮件: uid={m_id}, from={sender}, subject={subject}")
             if "openai" not in sender and "openai" not in subject.lower() and "chatgpt" not in subject.lower():
                 continue
             try:
                 raw_body = inboxes_com_get_message_body(m_id, user_id=dev_token)
-                clean_body = re.sub(r"<[^>]+>", " ", raw_body)
+                clean_body = re.sub(r"(?is)<(style|script)[^>]*>.*?</\1>", " ", raw_body)
+                clean_body = re.sub(r"<[^>]+>", " ", clean_body)
+                clean_body = unescape(clean_body)
                 clean_body = re.sub(r"\s+", " ", clean_body).strip()
                 combined_text = subject + " \n " + clean_body
             except Exception as exc:
@@ -2144,7 +2153,8 @@ def tempmail_lol_get_oai_code(
             content = "\n".join([sender, subject, body, html])
             if "openai" not in sender and "openai" not in content.lower():
                 continue
-            code = extract_verification_code(content, subject)
+            safe_content = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", " ", content)
+            code = extract_verification_code(safe_content, subject)
             if code:
                 if log_callback:
                     log_callback(f"[*] Tempmail.lol 从邮件中提取到验证码: {code}")

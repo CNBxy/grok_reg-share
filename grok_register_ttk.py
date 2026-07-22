@@ -735,29 +735,38 @@ def _grok2api_find_account_id(email, base_url, mgmt_key, log_callback=None, retr
 
 
 def _grok2api_enable_nsfw(account_id, base_url, mgmt_key, log_callback=None, retries=3, retry_delay=2):
-    """Call grok2api to enable NSFW for a web account (accept terms + set birthday + enable NSFW)."""
+    """Call grok2api to accept terms + set birthday + enable NSFW via batch scripts endpoint."""
+    import json as _json
     headers = {"Content-Type": "application/json"}
     if mgmt_key:
         headers["Authorization"] = f"Bearer {mgmt_key}"
-    url = f"{base_url}/api/admin/v1/accounts/web/{account_id}/nsfw"
+    url = f"{base_url}/api/admin/v1/accounts/web/run-scripts"
+    payload = {
+        "ids": [str(account_id)],
+        "actions": {
+            "acceptTerms": True,
+            "setBirthDate": True,
+            "enableNSFW": True,
+        },
+    }
     last_exc = None
     for attempt in range(1, retries + 1):
         try:
-            resp = http_post(url, headers=headers, timeout=60, proxies={})
+            resp = http_post(url, headers=headers, data=_json.dumps(payload), timeout=120, proxies={})
             if resp.status_code == 401:
                 if log_callback:
-                    log_callback("[grok2api] NSFW 认证失败")
+                    log_callback("[grok2api] 账号工具认证失败")
                 return False
             resp.raise_for_status()
             if log_callback:
-                log_callback(f"[grok2api] NSFW 开启成功 (account_id={account_id})")
+                log_callback(f"[grok2api] 账号工具执行成功 (account_id={account_id})")
             return True
         except Exception as exc:
             last_exc = exc
             if attempt < retries:
                 time.sleep(retry_delay)
     if log_callback:
-        log_callback(f"[grok2api] NSFW 开启失败({retries}次, account_id={account_id}): {last_exc}")
+        log_callback(f"[grok2api] 账号工具执行失败({retries}次, account_id={account_id}): {last_exc}")
     return False
 
 

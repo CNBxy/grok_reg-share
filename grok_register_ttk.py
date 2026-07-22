@@ -1872,7 +1872,11 @@ def generator_email_get_code_from_detail(href, surl):
     clean_text = re.sub(r"<[^>]+>", " ", clean_text)
     clean_text = unescape(clean_text)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
-    return extract_verification_code(clean_text)
+    code = extract_verification_code(clean_text)
+    if not code:
+        import logging
+        logging.warning(f"[GeneratorEmail] 无法提取验证码，清理后内容前500字: {clean_text[:500]}")
+    return code
 
 
 def generator_email_get_email_and_token():

@@ -1868,10 +1868,9 @@ def generator_email_get_code_from_detail(href, surl):
         return None
 
     raw_html = resp.text or ""
-    clean_text = re.sub(r"(?is)<(style|script)[^>]*>.*?</\1>", " ", raw_html)
-    clean_text = re.sub(r"<[^>]+>", " ", clean_text)
-    clean_text = unescape(clean_text)
+    clean_text = clean_html_to_text(raw_html)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
+    clean_text = strip_email_addresses(clean_text)
     code = extract_verification_code(clean_text)
     if not code:
         import logging
@@ -2020,7 +2019,6 @@ def inboxes_com_get_oai_code(
     cancel_callback=None,
 ):
     """Inboxes.com 轮询验证码"""
-    from html import unescape
     deadline = time.time() + timeout
     seen_ids = set()
     while time.time() < deadline:
@@ -2047,18 +2045,17 @@ def inboxes_com_get_oai_code(
                 continue
             try:
                 raw_body = inboxes_com_get_message_body(m_id, user_id=dev_token)
-                clean_body = re.sub(r"(?is)<(style|script)[^>]*>.*?</\1>", " ", raw_body)
-                clean_body = re.sub(r"<[^>]+>", " ", clean_body)
-                clean_body = unescape(clean_body)
+                clean_body = clean_html_to_text(raw_body)
                 clean_body = re.sub(r"\s+", " ", clean_body).strip()
                 combined_text = subject + " \n " + clean_body
+                safe_text = strip_email_addresses(combined_text)
                 if log_callback:
                     log_callback(f"[Debug] Inboxes.com 邮件正文前300字: {combined_text[:300]}")
             except Exception as exc:
                 if log_callback:
                     log_callback(f"[Debug] Inboxes.com 获取邮件详情失败: {exc}")
                 continue
-            code = extract_verification_code(combined_text, subject)
+            code = extract_verification_code(safe_text, subject)
             if code:
                 if log_callback:
                     log_callback(f"[*] Inboxes.com 从邮件中提取到验证码: {code}")
@@ -2155,11 +2152,12 @@ def tempmail_lol_get_oai_code(
             sender = str(msg.get("from", "")).lower()
             subject = str(msg.get("subject", ""))
             body = str(msg.get("body", ""))
-            html = re.sub(r"<[^>]+>", " ", str(msg.get("html") or ""))
-            content = "\n".join([sender, subject, body, html])
+            html = str(msg.get("html") or "")
+            clean_html = clean_html_to_text(html)
+            content = "\n".join([sender, subject, body, clean_html])
             if "openai" not in sender and "openai" not in content.lower():
                 continue
-            safe_content = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", " ", content)
+            safe_content = strip_email_addresses(content)
             code = extract_verification_code(safe_content, subject)
             if code:
                 if log_callback:
@@ -2255,7 +2253,8 @@ def tempmail_org_get_oai_code(
             subject = str(msg.get("subject", ""))
             body_preview = str(msg.get("bodyPreview", ""))
             content = "\n".join([subject, body_preview])
-            code = extract_verification_code(content, subject)
+            safe_content = strip_email_addresses(content)
+            code = extract_verification_code(safe_content, subject)
             if code:
                 if log_callback:
                     log_callback(f"[*] TempMail.org 从邮件中提取到验证码: {code}")
@@ -2528,7 +2527,7 @@ def catchmail_get_oai_code(
                 log_callback(f"[Debug] Catchmail.io 发现邮件: id={msg_id}, from={sender}, subject={subject}")
             if "openai" not in combined.lower():
                 continue
-            code = extract_verification_code(combined, subject)
+            code = extract_verification_code(strip_email_addresses(combined), subject)
             if code:
                 if log_callback:
                     log_callback(f"[*] Catchmail.io 从邮件中提取到验证码: {code}")
@@ -2537,9 +2536,10 @@ def catchmail_get_oai_code(
                 detail = catchmail_get_message_detail(msg_id, email)
                 if detail:
                     body_text = str(detail.get("body", {}).get("text", ""))
-                    body_html = re.sub(r"<[^>]+>", " ", str(detail.get("body", {}).get("html", "")))
+                    body_html = clean_html_to_text(str(detail.get("body", {}).get("html", "")))
                     detail_content = "\n".join([subject, body_text, body_html])
-                    code = extract_verification_code(detail_content, subject)
+                    safe_detail = strip_email_addresses(detail_content)
+                    code = extract_verification_code(safe_detail, subject)
                     if code:
                         if log_callback:
                             log_callback(f"[*] Catchmail.io 从邮件详情中提取到验证码: {code}")
@@ -2684,7 +2684,7 @@ def guerrilla_get_oai_code(
                 log_callback(f"[Debug] Guerrilla Mail 发现邮件: from={sender}, subject={subject}")
             if "openai" not in combined.lower():
                 continue
-            code = extract_verification_code(combined, subject)
+            code = extract_verification_code(strip_email_addresses(combined), subject)
             if code:
                 if log_callback:
                     log_callback(f"[*] Guerrilla Mail 从邮件中提取到验证码: {code}")
@@ -2693,9 +2693,10 @@ def guerrilla_get_oai_code(
                 detail = guerrilla_fetch_email(dev_token, mail_id)
                 if detail:
                     body_text = str(detail.get("mail_body", ""))
-                    body_html = re.sub(r"<[^>]+>", " ", body_text)
+                    body_html = clean_html_to_text(body_text)
                     detail_content = "\n".join([subject, body_html])
-                    code = extract_verification_code(detail_content, subject)
+                    safe_detail = strip_email_addresses(detail_content)
+                    code = extract_verification_code(safe_detail, subject)
                     if code:
                         if log_callback:
                             log_callback(f"[*] Guerrilla Mail 从邮件详情中提取到验证码: {code}")
@@ -2854,7 +2855,7 @@ def mailtm_get_oai_code(
             combined = f"{sender}\n{subject}"
             if "openai" not in combined.lower():
                 continue
-            code = extract_verification_code(combined, subject)
+            code = extract_verification_code(strip_email_addresses(combined), subject)
             if code:
                 if log_callback:
                     log_callback(f"[*] Mail.tm 从邮件中提取到验证码: {code}")
@@ -2865,7 +2866,8 @@ def mailtm_get_oai_code(
                     intro = str(detail.get("intro", ""))
                     text = str(detail.get("text", ""))
                     detail_content = "\n".join([subject, intro, text])
-                    code = extract_verification_code(detail_content, subject)
+                    safe_detail = strip_email_addresses(detail_content)
+                    code = extract_verification_code(safe_detail, subject)
                     if code:
                         if log_callback:
                             log_callback(f"[*] Mail.tm 从邮件详情中提取到验证码: {code}")
@@ -3092,18 +3094,31 @@ def get_oai_code(
     )
 
 
+def clean_html_to_text(raw_html):
+    """与 CPA 内存池 _clean_html_to_text 一致"""
+    if not raw_html:
+        return ""
+    from html import unescape
+    text = re.sub(r"(?is)<(style|script)[^>]*>.*?</\1>", " ", str(raw_html))
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = unescape(text)
+    return text
+
+
+def strip_email_addresses(text):
+    """与 CPA 内存池一致：提取前剔除邮箱地址，避免干扰验证码匹配"""
+    return re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", " ", text)
+
+
 def extract_verification_code(text, subject=""):
+    """与 CPA 内存池 _extract_otp_code 完全一致"""
     content = f"{subject}\n{text}" if subject else text
     patterns = [
-        r"(?i)Your (?:ChatGPT|OpenAI|xAI|X\.ai) code is\s*(\d{4,8})",
-        r"(?i)(?:ChatGPT|OpenAI|xAI|X\.ai) code is\s*(\d{4,8})",
-        r"(?i)verification code to continue:\s*(\d{4,8})",
-        r"(?i)enter this code:\s*(\d{4,8})",
-        r"(?i)verification\s+code[:\s]+(\d{4,8})",
-        r"(?i)your\s+code[:\s]+(\d{4,8})",
-        r"(?i)confirm(?:ation)?\s+code[:\s]+(\d{4,8})",
-        r"(?i)code\s+is[:\s]+(\d{4,8})",
-        r"(?i)use\s+(?:this\s+)?(?:code|pin)[:\s]+(\d{4,8})",
+        r"(?i)Your (?:ChatGPT|OpenAI) code is\s*(\d{6})",
+        r"(?i)(?:ChatGPT|OpenAI) code is\s*(\d{6})",
+        r"(?i)verification code to continue:\s*(\d{6})",
+        r"(?i)Subject:.*?(\d{6})",
+        r"(?i)enter this code:\s*(\d{6})",
     ]
     for p in patterns:
         m = re.search(p, content)

@@ -3111,13 +3111,19 @@ def strip_email_addresses(text):
 
 
 def extract_verification_code(text, subject=""):
-    """与 CPA 内存池 _extract_otp_code 完全一致"""
+    """CPA 内存池 _extract_otp_code + XXX-XXX 格式支持"""
     content = f"{subject}\n{text}" if subject else text
+    if subject:
+        m = re.search(r"([A-Z0-9]{3}-[A-Z0-9]{3})", subject, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    m = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", content, re.IGNORECASE)
+    if m:
+        return m.group(1)
     patterns = [
         r"(?i)Your (?:ChatGPT|OpenAI) code is\s*(\d{6})",
         r"(?i)(?:ChatGPT|OpenAI) code is\s*(\d{6})",
         r"(?i)verification code to continue:\s*(\d{6})",
-        r"(?i)Subject:.*?(\d{6})",
         r"(?i)enter this code:\s*(\d{6})",
     ]
     for p in patterns:

@@ -192,9 +192,10 @@ def export_cpa_xai_for_account(
             log(f"[cpa] hotload copy failed: {e}")
             result["cpa_copy_error"] = str(e)
 
-    # 成功后推送远程 CPA 仓管（CLIProxyAPI 等）
+    # 成功后推送远程 CPA 仓管
     if result.get("ok") and result.get("path"):
-        push_cpa_to_remote(result["path"], cfg, log)
+        push_cpa_to_remote(result["path"], cfg, log)          # CLIProxyAPI（旧，cpa_remote_push_*）
+        push_cpa_to_grok2api_build(result["path"], cfg, log)  # grok2api Build 导入（新，grok2api_import_*）
 
     # failure log under register dir
     if not result.get("ok"):
@@ -207,8 +208,136 @@ def export_cpa_xai_for_account(
     return result
 
 
+def push_cpa_to_grok2api_build(auth_file_path: str, cfg: dict, log: Callable[[str], None] | None = None) -> bool:
+    """将 CPA xai-*.json 推送到 grok2api Grok Build（从画面中导入账号 流程）。
+
+    配置项：
+        grok2api_import_enabled       : 是否开启 grok2api 导入推送
+        grok2api_import_base          : grok2api 根 URL，如 http://127.0.0.1:8000
+        grok2api_import_management_key: Management Key（Bearer 认证）
+        grok2api_import_retries       : 重试次数（默认3）
+        grok2api_import_retry_delay   : 重试间隔秒数（默认2）
+
+    推送方式：
+        POST {base}/api/admin/v1/accounts/import/body
+        Authorization: Bearer <management_key>
+        Content-Type: application/json
+        Body = Grok Build 导入格式 JSON
+    """
+    log = log or (lambda m: print(m, flush=True))
+
+    if not cfg.get("grok2api_import_enabled", False):
+        return False
+
+    base_url = str(cfg.get("grok2api_import_base", "") or "").strip().rstrip("/")
+    if not base_url:
+        log("[cpa-push] grok2api_import_base 未配置，跳过")
+        return False
+
+    mgmt_key = str(cfg.get("grok2api_import_management_key", "") or "").strip()
+
+    try:
+        auth_path = Path(auth_file_path)
+        if not auth_path.exists():
+            log(f"[cpa-push] 文件不存在: {auth_file_path}")
+            return False
+        with open(auth_path, "r", encoding="utf-8") as f:
+            cpa_data = json.load(f)
+    except Exception as e:
+        log(f"[cpa-push] 读取文件失败: {e}")
+        return False
+
+    # 将 CPA xai 格式转换为 Grok Build 导入格式
+    access_token = (cpa_data.get("access_token") or "").strip()
+    refresh_token = (cpa_data.get("refresh_token") or "").strip()
+    if not access_token:
+        log("[cpa-push] CPA 文件中无 access_token，跳过")
+        return False
+
+    email = (cpa_data.get("email") or "").strip()
+    user_id = (cpa_data.get("sub") or "").strip()
+    id_token = (cpa_data.get("id_token") or "").strip()
+    # expired 格式为 YYYY-MM-DDTHH:MM:SSZ，转为 RFC3339
+    expired_raw = (cpa_data.get("expired") or "").strip()
+    expires_at = ""
+    if expired_raw:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(expired_raw.replace("Z", "+0000"), "%Y-%m-%dT%H:%M:%S%z")
+            expires_at = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            expires_at = expired_raw
+
+    name = email or f"Grok Build {user_id[:8] if user_id else ''}"
+
+    # Build 导入 JSON 格式
+    build_entry = {
+        "provider": "grok_build",
+        "name": name,
+        "client_id": "b1a00492-073a-47ea-816f-4c329264a828",
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
+        "email": email,
+        "user_id": user_id,
+    }
+    if id_token:
+        build_entry["id_token"] = id_token
+    if expires_at:
+        build_entry["expires_at"] = expires_at
+
+    build_payload = json.dumps({"accounts": [build_entry]}, ensure_ascii=False)
+
+    target_url = f"{base_url}/api/admin/v1/accounts/import/body"
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if mgmt_key:
+        headers["Authorization"] = f"Bearer {mgmt_key}"
+
+    import urllib.request
+    import urllib.error
+
+    data = build_payload.encode("utf-8")
+    req = urllib.request.Request(target_url, data=data, headers=headers, method="POST")
+
+    retries = int(cfg.get("grok2api_import_retries", 3))
+    retry_delay = float(cfg.get("grok2api_import_retry_delay", 2))
+
+    for attempt in range(1, retries + 1):
+        try:
+            proxy = (cfg.get("cpa_proxy") or cfg.get("proxy") or "").strip()
+            if proxy:
+                proxy_handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+                opener = urllib.request.build_opener(proxy_handler)
+            else:
+                opener = urllib.request.build_opener()
+            resp = opener.open(req, timeout=15)
+            resp_body = resp.read().decode("utf-8", errors="replace")
+            status = resp.getcode()
+            if 200 <= status < 300:
+                log(f"[cpa-push] 已推送 Build 凭证 -> {target_url} (HTTP {status})")
+                return True
+            else:
+                log(f"[cpa-push] 推送失败 HTTP {status}: {resp_body[:200]}")
+                if attempt < retries:
+                    time.sleep(retry_delay)
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")[:200]
+            except Exception:
+                pass
+            log(f"[cpa-push] 推送失败 HTTP {e.code}: {err_body}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+        except Exception as e:
+            log(f"[cpa-push] 推送异常(尝试 {attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+    return False
+
+
 def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None] | None = None) -> bool:
-    """将 CPA xai-*.json 推送到远程 CPA 仓管 API（CLIProxyAPI 等）。
+    """将 CPA xai-*.json 推送到远程 CLIProxyAPI 仓管（原始逻辑）。
 
     配置项：
         cpa_remote_push_enabled  : 是否开启远程推送

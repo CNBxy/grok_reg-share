@@ -45,12 +45,13 @@ DEFAULT_CONFIG = {
     "enable_nsfw": True,
     "register_count": 1,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-    "grok2api_auto_add_local": True,
+    "grok2api_import_enabled": True,
+    "grok2api_import_base": "http://127.0.0.1:8000",
+    "grok2api_import_management_key": "",
+    "grok2api_import_retries": 3,
+    "grok2api_import_retry_delay": 2,
+    "grok2api_auto_add_local": False,
     "grok2api_local_token_file": "",
-    "grok2api_pool_name": "ssoBasic",
-    "grok2api_auto_add_remote": False,
-    "grok2api_remote_base": "",
-    "grok2api_remote_app_key": "",
     "register_threads": 1,
     "thread_start_interval": 0.8,
     "show_tutorial_on_start": True,
@@ -632,9 +633,7 @@ def add_token_to_grok2api_local_pool(raw_token, email="", log_callback=None):
     if not token:
         return False
     token_file = resolve_grok2api_local_token_file()
-    pool_name = str(config.get("grok2api_pool_name", "ssoBasic") or "ssoBasic").strip()
-    if not pool_name:
-        pool_name = "ssoBasic"
+    pool_name = str(config.get("grok2api_pool_name", "ssoBasic") or "ssoBasic").strip() or "ssoBasic"
     os.makedirs(os.path.dirname(token_file), exist_ok=True)
     data = {}
     if os.path.exists(token_file):
@@ -668,88 +667,84 @@ def add_token_to_grok2api_local_pool(raw_token, email="", log_callback=None):
     return True
 
 
+def _grok2api_push_import(body, provider_path, mgmt_key, base_url, log_callback, retries=3, retry_delay=2):
+    """Push credentials to grok2api import/body endpoint via management key auth."""
+    headers = {"Content-Type": "text/plain; charset=utf-8"}
+    if mgmt_key:
+        headers["Authorization"] = f"Bearer {mgmt_key}"
+    url = f"{base_url}/api/admin/v1/accounts/{provider_path}/import/body"
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = http_post(url, headers=headers, data=body, timeout=30, proxies={})
+            if resp.status_code == 401:
+                if log_callback:
+                    log_callback(f"[grok2api] 认证失败，检查 management_key 配置")
+                return False
+            resp.raise_for_status()
+            if log_callback:
+                log_callback(f"[+] grok2api {provider_path} 导入成功: {url}")
+            return True
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(retry_delay)
+    if log_callback:
+        log_callback(f"[!] grok2api {provider_path} 导入失败({retries}次): {last_exc}")
+    return False
+
+
 def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
+    """Push SSO to grok2api Grok Web & Grok Console via import API (从画面中导入账号 流程)."""
     token = _normalize_sso_token(raw_token)
     if not token:
         return False
-    base = str(config.get("grok2api_remote_base", "") or "").strip().rstrip("/")
-    app_key = str(os.environ.get("GROK2API_APP_KEY") or config.get("grok2api_remote_app_key", "") or "").strip()
-    pool_name = str(config.get("grok2api_pool_name", "ssoBasic") or "ssoBasic").strip() or "ssoBasic"
-    if not base or not app_key:
+    base = str(config.get("grok2api_import_base", "") or "").strip().rstrip("/")
+    mgmt_key = str(config.get("grok2api_import_management_key", "") or "").strip()
+    if not base:
         if log_callback:
-            log_callback("[Debug] grok2api 远端未配置 base/app_key，跳过")
+            log_callback("[Debug] grok2api_import_base 未配置，跳过远程导入")
         return False
-    headers = {"Content-Type": "application/json"}
-    query = {"app_key": app_key, "auto_nsfw": "true"}
-    pool_map = {"ssoBasic": "basic", "ssoSuper": "super"}
-    remote_pool = pool_map.get(pool_name, "basic")
-    # 优先使用 add 接口，避免全量覆盖远端池
-    try:
-        add_payload = {"tokens": [token], "pool": remote_pool, "tags": ["auto-register"]}
-        resp_add = http_post(
-            f"{base}/tokens/add",
-            headers=headers,
-            params=query,
-            json=add_payload,
-            timeout=8,
-            proxies={},
-        )
-        resp_add.raise_for_status()
-        if log_callback:
-            log_callback(f"[+] 已写入 grok2api 远端池: {pool_name} ({base}/tokens/add)")
-        return True
-    except Exception as add_exc:
-        if log_callback:
-            log_callback(f"[Debug] /tokens/add 写入失败，尝试 /tokens 全量模式: {add_exc}")
 
-    # 兜底：旧版全量保存接口
-    current = {}
-    try:
-        resp = http_get(f"{base}/tokens", headers=headers, params=query, timeout=6, proxies={})
-        if resp.status_code == 200:
-            payload = resp.json()
-            current = payload.get("tokens", {}) if isinstance(payload, dict) else {}
-    except Exception:
-        current = {}
-    if not isinstance(current, dict):
-        current = {}
-    pool = current.get(pool_name)
-    if not isinstance(pool, list):
-        pool = []
-    existing = set()
-    for item in pool:
-        if isinstance(item, str):
-            existing.add(_normalize_sso_token(item))
-        elif isinstance(item, dict):
-            existing.add(_normalize_sso_token(item.get("token", "")))
-    if token not in existing:
-        pool.append({"token": token, "tags": ["auto-register"], "note": email})
-    current[pool_name] = pool
-    resp2 = http_post(f"{base}/tokens", headers=headers, params=query, json=current, timeout=8, proxies={})
-    resp2.raise_for_status()
-    if log_callback:
-        log_callback(f"[+] 已写入 grok2api 远端池: {pool_name} ({base}/tokens)")
+    _grok2api_push_import(
+        body=token,
+        provider_path="web",
+        mgmt_key=mgmt_key,
+        base_url=base,
+        log_callback=log_callback,
+        retries=int(config.get("grok2api_import_retries", 3)),
+        retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
+    )
+    _grok2api_push_import(
+        body=token,
+        provider_path="console",
+        mgmt_key=mgmt_key,
+        base_url=base,
+        log_callback=log_callback,
+        retries=int(config.get("grok2api_import_retries", 3)),
+        retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
+    )
     return True
 
 
 def _add_token_to_grok2api_pools_sync(raw_token, email="", log_callback=None):
     # SSO 账本只写 accounts_cli.txt；不再本地备份 tokens/grok/
-    if config.get("grok2api_auto_add_local", True):
+    if config.get("grok2api_auto_add_local", False):
         try:
             add_token_to_grok2api_local_pool(raw_token, email=email, log_callback=log_callback)
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] 写入 grok2api 本地池失败: {exc}")
-    if config.get("grok2api_auto_add_remote", False):
+    if config.get("grok2api_import_enabled", True):
         try:
             add_token_to_grok2api_remote_pool(raw_token, email=email, log_callback=log_callback)
         except Exception as exc:
             if log_callback:
-                log_callback(f"[Debug] 写入 grok2api 远端池失败: {exc}")
+                log_callback(f"[Debug] 写入 grok2api 导入失败: {exc}")
 
 
 def add_token_to_grok2api_pools(raw_token, email="", log_callback=None):
-    """Push SSO into grok2api pools. Async by default so register path never blocks on dead :8000."""
+    """Push SSO into grok2api pools. Async by default so register path never blocks on dead target."""
     if PERF_FLAGS.get("async_side_effects", True):
         def _job():
             try:
@@ -760,7 +755,7 @@ def add_token_to_grok2api_pools(raw_token, email="", log_callback=None):
         try:
             _get_side_effect_pool().submit(_job)
             if log_callback:
-                log_callback("[*] grok2api 池写入已异步提交")
+                log_callback("[*] grok2api 导入已异步提交")
             return
         except Exception as exc:
             if log_callback:
@@ -3391,41 +3386,30 @@ class GrokRegisterGUI:
         self.cloudmail_password_entry = ttk.Entry(config_frame, textvariable=self.cloudmail_password_var, width=30, show="*")
         self.cloudmail_password_entry.grid(row=10, column=1, columnspan=3, sticky=tk.W, padx=5)
 
-        ttk.Label(config_frame, text="grok2api 本地自动入池:").grid(row=11, column=0, sticky=tk.W)
-        self.grok2api_local_auto_var = tk.BooleanVar(value=bool(config.get("grok2api_auto_add_local", True)))
-        self.grok2api_local_auto_check = ttk.Checkbutton(config_frame, variable=self.grok2api_local_auto_var)
-        self.grok2api_local_auto_check.grid(row=11, column=1, sticky=tk.W, padx=5)
+        ttk.Label(config_frame, text="grok2api 导入启用:").grid(row=11, column=0, sticky=tk.W)
+        self.grok2api_import_enabled_var = tk.BooleanVar(value=bool(config.get("grok2api_import_enabled", True)))
+        self.grok2api_import_enabled_check = ttk.Checkbutton(config_frame, variable=self.grok2api_import_enabled_var)
+        self.grok2api_import_enabled_check.grid(row=11, column=1, sticky=tk.W, padx=5)
 
-        ttk.Label(config_frame, text="grok2api 本地 token.json:").grid(row=12, column=0, sticky=tk.W)
-        self.grok2api_local_file_var = tk.StringVar(value=str(config.get("grok2api_local_token_file", "")))
-        self.grok2api_local_file_entry = ttk.Entry(config_frame, textvariable=self.grok2api_local_file_var, width=30)
-        self.grok2api_local_file_entry.grid(row=12, column=1, columnspan=3, sticky=tk.W, padx=5)
+        ttk.Label(config_frame, text="grok2api 根地址:").grid(row=12, column=0, sticky=tk.W)
+        self.grok2api_import_base_var = tk.StringVar(value=str(config.get("grok2api_import_base", "http://127.0.0.1:8000")))
+        self.grok2api_import_base_entry = ttk.Entry(config_frame, textvariable=self.grok2api_import_base_var, width=30)
+        self.grok2api_import_base_entry.grid(row=12, column=1, columnspan=3, sticky=tk.W, padx=5)
 
-        ttk.Label(config_frame, text="grok2api 池名:").grid(row=13, column=0, sticky=tk.W)
-        self.grok2api_pool_name_var = tk.StringVar(value=str(config.get("grok2api_pool_name", "ssoBasic")))
-        self.grok2api_pool_name_combo = ttk.Combobox(
-            config_frame,
-            textvariable=self.grok2api_pool_name_var,
-            values=["ssoBasic", "ssoSuper"],
-            width=12,
-            state="readonly",
-        )
-        self.grok2api_pool_name_combo.grid(row=13, column=1, sticky=tk.W, padx=5)
+        ttk.Label(config_frame, text="grok2api Management Key:").grid(row=13, column=0, sticky=tk.W)
+        self.grok2api_import_mgmt_key_var = tk.StringVar(value=str(config.get("grok2api_import_management_key", "")))
+        self.grok2api_import_mgmt_key_entry = ttk.Entry(config_frame, textvariable=self.grok2api_import_mgmt_key_var, width=30)
+        self.grok2api_import_mgmt_key_entry.grid(row=13, column=1, columnspan=3, sticky=tk.W, padx=5)
 
-        ttk.Label(config_frame, text="grok2api 远端自动入池:").grid(row=14, column=0, sticky=tk.W)
-        self.grok2api_remote_auto_var = tk.BooleanVar(value=bool(config.get("grok2api_auto_add_remote", False)))
-        self.grok2api_remote_auto_check = ttk.Checkbutton(config_frame, variable=self.grok2api_remote_auto_var)
-        self.grok2api_remote_auto_check.grid(row=14, column=1, sticky=tk.W, padx=5)
+        ttk.Label(config_frame, text="grok2api 导入重试次数:").grid(row=14, column=0, sticky=tk.W)
+        self.grok2api_import_retries_var = tk.StringVar(value=str(config.get("grok2api_import_retries", 3)))
+        self.grok2api_import_retries_entry = ttk.Entry(config_frame, textvariable=self.grok2api_import_retries_var, width=8)
+        self.grok2api_import_retries_entry.grid(row=14, column=1, sticky=tk.W, padx=5)
 
-        ttk.Label(config_frame, text="grok2api 远端 Base:").grid(row=15, column=0, sticky=tk.W)
-        self.grok2api_remote_base_var = tk.StringVar(value=str(config.get("grok2api_remote_base", "")))
-        self.grok2api_remote_base_entry = ttk.Entry(config_frame, textvariable=self.grok2api_remote_base_var, width=30)
-        self.grok2api_remote_base_entry.grid(row=15, column=1, columnspan=3, sticky=tk.W, padx=5)
-
-        ttk.Label(config_frame, text="grok2api 远端 app_key:").grid(row=16, column=0, sticky=tk.W)
-        self.grok2api_remote_key_var = tk.StringVar(value=str(config.get("grok2api_remote_app_key", "")))
-        self.grok2api_remote_key_entry = ttk.Entry(config_frame, textvariable=self.grok2api_remote_key_var, width=30)
-        self.grok2api_remote_key_entry.grid(row=16, column=1, columnspan=3, sticky=tk.W, padx=5)
+        ttk.Label(config_frame, text="导入重试间隔(秒):").grid(row=15, column=0, sticky=tk.W)
+        self.grok2api_import_retry_delay_var = tk.StringVar(value=str(config.get("grok2api_import_retry_delay", 2)))
+        self.grok2api_import_retry_delay_entry = ttk.Entry(config_frame, textvariable=self.grok2api_import_retry_delay_var, width=8)
+        self.grok2api_import_retry_delay_entry.grid(row=15, column=1, sticky=tk.W, padx=5)
         ttk.Label(config_frame, text="默认域名(defaultDomains):").grid(row=17, column=0, sticky=tk.W)
         self.default_domains_var = tk.StringVar(value=str(config.get("defaultDomains", "")))
         self.default_domains_entry = ttk.Entry(config_frame, textvariable=self.default_domains_var, width=30)
@@ -3630,12 +3614,11 @@ class GrokRegisterGUI:
         config["cloudmail_url"] = self.cloudmail_url_var.get().strip()
         config["cloudmail_admin_email"] = self.cloudmail_admin_email_var.get().strip()
         config["cloudmail_password"] = self.cloudmail_password_var.get().strip()
-        config["grok2api_auto_add_local"] = bool(self.grok2api_local_auto_var.get())
-        config["grok2api_local_token_file"] = self.grok2api_local_file_var.get().strip()
-        config["grok2api_pool_name"] = self.grok2api_pool_name_var.get().strip() or "ssoBasic"
-        config["grok2api_auto_add_remote"] = bool(self.grok2api_remote_auto_var.get())
-        config["grok2api_remote_base"] = self.grok2api_remote_base_var.get().strip()
-        config["grok2api_remote_app_key"] = self.grok2api_remote_key_var.get().strip()
+        config["grok2api_import_enabled"] = bool(self.grok2api_import_enabled_var.get())
+        config["grok2api_import_base"] = self.grok2api_import_base_var.get().strip()
+        config["grok2api_import_management_key"] = self.grok2api_import_mgmt_key_var.get().strip()
+        config["grok2api_import_retries"] = int(self.grok2api_import_retries_var.get().strip() or "3")
+        config["grok2api_import_retry_delay"] = int(self.grok2api_import_retry_delay_var.get().strip() or "2")
         config["defaultDomains"] = self.default_domains_var.get().strip()
         try:
             config["register_threads"] = max(1, min(10, int(self.thread_var.get())))

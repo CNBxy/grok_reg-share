@@ -583,6 +583,9 @@ def api_test_mail():
             "tempmail": [],
             "tempmail_org": [],
             "freemail": ["freemail_api_url"],
+            "catchmail": [],
+            "guerrilla": [],
+            "mailtm": [],
         }.get(provider, [])
         missing = [k for k in required if not str(cfg.get(k) or "").strip()]
         if missing:

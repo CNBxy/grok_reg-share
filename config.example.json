@@ -3,7 +3,7 @@
   "//_paths": "相对路径相对 grok_reg 目录；CPA 相关绝对路径更清晰。",
 
   "// ===== 邮箱：注册验证码来源 =====": "",
-  "// email_provider": "openai_cpa | cloudmail | cloudflare | duckmail | yyds | generator_email | inboxes | tempmail | tempmail_org | freemail。openai_cpa 为 Webhook 内存池模式。",
+  "// email_provider": "openai_cpa | cloudmail | cloudflare | duckmail | yyds | generator_email | inboxes | tempmail | tempmail_org | freemail | catchmail | guerrilla | mailtm。openai_cpa 为 Webhook 内存池模式。",
   "email_provider": "cloudmail",
   "// defaultDomains": "注册用邮箱域名，逗号分隔；cloudmail catch-all 域名写这里。",
   "defaultDomains": "example.com",

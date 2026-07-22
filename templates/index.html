@@ -784,6 +784,15 @@ const PROVIDER_FIELDS = {
     "defaultDomains",
     "freemail_api_url",
     "freemail_api_token"
+  ],
+  "catchmail": [
+    "defaultDomains"
+  ],
+  "guerrilla": [
+    "defaultDomains"
+  ],
+  "mailtm": [
+    "defaultDomains"
   ]
 };
 
@@ -793,7 +802,8 @@ const ALL_PROVIDER_KEYS = [
   "cloudmail_url", "cloudmail_admin_email", "cloudmail_password",
   "cloudflare_api_base", "cloudflare_api_key", "cloudflare_auth_mode",
   "cloudflare_path_domains", "cloudflare_path_accounts", "cloudflare_path_token", "cloudflare_path_messages",
-  "duckmail_api_key", "yyds_api_key", "yyds_jwt"
+  "duckmail_api_key", "yyds_api_key", "yyds_jwt",
+  "freemail_api_url", "freemail_api_token"
 ];
 
 let currentConfig = {};
@@ -819,7 +829,7 @@ function renderConfig(cfg) {
     const renderKeys = [];
     for (const k of keys) {
       if (k in cfg) renderKeys.push(k);
-      else if (k === 'email_provider' || ALL_PROVIDER_KEYS.includes(k) || k.startsWith('openai_cpa_') || k.startsWith('cloudmail_') || k.startsWith('cloudflare_') || k.startsWith('duckmail_') || k.startsWith('yyds_')) {
+      else if (k === 'email_provider' || ALL_PROVIDER_KEYS.includes(k) || k.startsWith('openai_cpa_') || k.startsWith('cloudmail_') || k.startsWith('cloudflare_') || k.startsWith('duckmail_') || k.startsWith('yyds_') || k.startsWith('freemail_')) {
         if (!(k in cfg)) cfg[k] = (typeof currentConfig[k] !== 'undefined') ? currentConfig[k] : '';
         if (k in cfg) renderKeys.push(k);
       }
@@ -892,6 +902,9 @@ function createFieldMarkup(key, val, container) {
         <option value="tempmail" ${v === 'tempmail' ? 'selected' : ''}>Tempmail.lol</option>
         <option value="tempmail_org" ${v === 'tempmail_org' ? 'selected' : ''}>TempMail.org</option>
         <option value="freemail" ${v === 'freemail' ? 'selected' : ''}>FreeMail</option>
+        <option value="catchmail" ${v === 'catchmail' ? 'selected' : ''}>Catchmail.io</option>
+        <option value="guerrilla" ${v === 'guerrilla' ? 'selected' : ''}>Guerrilla Mail</option>
+        <option value="mailtm" ${v === 'mailtm' ? 'selected' : ''}>Mail.tm</option>
       </select>
     `;
   } else if (key === 'cloudflare_auth_mode') {

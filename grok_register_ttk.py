@@ -3087,26 +3087,23 @@ def get_oai_code(
 
 
 def extract_verification_code(text, subject=""):
-    if subject:
-        match = re.search(r"([A-Z0-9]{3}-[A-Z0-9]{3})", subject, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    match = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", text, re.IGNORECASE)
-    if match:
-        return match.group(1)
-    match = re.search(r"(?<![\d#])(\d{6})(?!\d)", f"{subject}\n{text}")
-    if match:
-        return match.group(1)
+    content = f"{subject}\n{text}" if subject else text
     patterns = [
-        r"verification\s+code[:\s]+(\d{4,8})",
-        r"your\s+code[:\s]+(\d{4,8})",
-        r"confirm(?:ation)?\s+code[:\s]+(\d{4,8})",
+        r"(?i)Your (?:ChatGPT|OpenAI) code is\s*(\d{6})",
+        r"(?i)(?:ChatGPT|OpenAI) code is\s*(\d{6})",
+        r"(?i)verification code to continue:\s*(\d{6})",
+        r"(?i)Subject:.*?(\d{6})",
+        r"(?i)enter this code:\s*(\d{6})",
+        r"(?i)verification\s+code[:\s]+(\d{6})",
+        r"(?i)your\s+code[:\s]+(\d{6})",
+        r"(?i)confirm(?:ation)?\s+code[:\s]+(\d{6})",
     ]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return None
+    for p in patterns:
+        m = re.search(p, content)
+        if m:
+            return m.group(1)
+    fallback = re.search(r"(?<![\d#])(\d{6})(?!\d)", content)
+    return fallback.group(1) if fallback else None
 
 
 def duckmail_get_oai_code(

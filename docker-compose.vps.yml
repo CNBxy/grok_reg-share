@@ -17,6 +17,28 @@ services:
     networks:
       - grok_internal
 
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    environment:
+      PROXY_ADDRESS: warp
+      PROXY_PORT: "1080"
+      PROXY_PROTOCOL: socks5
+      LOG_LEVEL: info
+    ports:
+      - "${FLARESOLVERR_HOST:-0.0.0.0}:${FLARESOLVERR_PORT:-8191}:8191"
+    depends_on:
+      warp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsSL", "http://127.0.0.1:8191/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - grok_internal
+
   app:
     build:
       context: .

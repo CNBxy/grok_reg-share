@@ -518,6 +518,219 @@ def get_proxies():
     return {}
 
 
+# ──────────────────────── FlareSolverr 客户端 ────────────────────────
+
+_flaresolverr_session_id = None
+
+
+def _flaresolverr_enabled():
+    return bool(config.get("flaresolverr_enabled", False))
+
+
+def _flaresolverr_url():
+    return str(config.get("flaresolverr_url", "") or "").rstrip("/")
+
+
+def flaresolverr_available():
+    """检测 FlareSolverr 是否在线"""
+    if not _flaresolverr_enabled() or not _flaresolverr_url():
+        return False
+    try:
+        from curl_cffi import requests as cf_requests
+        resp = cf_requests.get(_flaresolverr_url(), timeout=5, impersonate="chrome110")
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def flaresolverr_create_session():
+    """创建 FlareSolverr 持久会话"""
+    global _flaresolverr_session_id
+    if not _flaresolverr_enabled() or not _flaresolverr_url():
+        return None
+    try:
+        from curl_cffi import requests as cf_requests
+        resp = cf_requests.post(
+            f"{_flaresolverr_url()}/v1/sessions",
+            json={"cmd": "sessions.create"},
+            timeout=10,
+            impersonate="chrome110",
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            _flaresolverr_session_id = data.get("session")
+            return _flaresolverr_session_id
+    except Exception:
+        pass
+    return None
+
+
+def flaresolverr_destroy_session(session_id=None):
+    """销毁 FlareSolverr 会话"""
+    global _flaresolverr_session_id
+    sid = session_id or _flaresolverr_session_id
+    if not sid or not _flaresolverr_url():
+        return
+    try:
+        from curl_cffi import requests as cf_requests
+        cf_requests.post(
+            f"{_flaresolverr_url()}/v1/sessions",
+            json={"cmd": "sessions.destroy", "session": sid},
+            timeout=5,
+            impersonate="chrome110",
+        )
+    except Exception:
+        pass
+    if sid == _flaresolverr_session_id:
+        _flaresolverr_session_id = None
+
+
+def _is_cloudflare_blocked(resp):
+    """检测响应是否被 Cloudflare 拦截"""
+    if resp is None:
+        return False
+    status = getattr(resp, "status_code", 0)
+    if status in (403, 503):
+        headers = dict(getattr(resp, "headers", {}))
+        server = headers.get("server", "").lower()
+        if "cloudflare" in server:
+            return True
+        if headers.get("cf-mitigated"):
+            return True
+    if status in (403, 503):
+        try:
+            body = resp.text[:2000]
+            if "Just a moment" in body or "Checking your browser" in body or "cf-browser-verification" in body:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def flaresolverr_get(url, session_id=None, **kwargs):
+    """通过 FlareSolverr 发起 GET 请求，返回 (status_code, headers, text)"""
+    global _flaresolverr_session_id
+    fs_url = _flaresolverr_url()
+    if not fs_url:
+        return None
+    sid = session_id or _flaresolverr_session_id
+    payload = {"cmd": "request.get", "url": url, "maxTimeout": 60000}
+    if sid:
+        payload["session"] = sid
+    try:
+        from curl_cffi import requests as cf_requests
+        resp = cf_requests.post(
+            f"{fs_url}/v1",
+            json=payload,
+            timeout=90,
+            impersonate="chrome110",
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            solution = data.get("solution", {})
+            status = solution.get("status", 200)
+            headers = solution.get("responseHeaders", {})
+            body = solution.get("response", "")
+            return type("FlareSolverrResponse", (), {
+                "status_code": status,
+                "headers": headers,
+                "text": body,
+            })()
+    except Exception:
+        pass
+    return None
+
+
+def flaresolverr_post(url, post_data, session_id=None, **kwargs):
+    """通过 FlareSolverr 发起 POST 请求"""
+    global _flaresolverr_session_id
+    fs_url = _flaresolverr_url()
+    if not fs_url:
+        return None
+    sid = session_id or _flaresolverr_session_id
+    payload = {
+        "cmd": "request.post",
+        "url": url,
+        "maxTimeout": 60000,
+        "postData": post_data if isinstance(post_data, str) else str(post_data),
+    }
+    if sid:
+        payload["session"] = sid
+    try:
+        from curl_cffi import requests as cf_requests
+        resp = cf_requests.post(
+            f"{fs_url}/v1",
+            json=payload,
+            timeout=90,
+            impersonate="chrome110",
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            solution = data.get("solution", {})
+            status = solution.get("status", 200)
+            headers = solution.get("responseHeaders", {})
+            body = solution.get("response", "")
+            return type("FlareSolverrResponse", (), {
+                "status_code": status,
+                "headers": headers,
+                "text": body,
+            })()
+    except Exception:
+        pass
+    return None
+
+
+def http_get_with_fallback(url, **kwargs):
+    """GET 请求，Cloudflare 拦截时自动回退 FlareSolverr"""
+    from curl_cffi import requests as cf_requests
+    req_kwargs = dict(kwargs)
+    proxies = req_kwargs.pop("proxies", None)
+    if proxies is None:
+        proxies = get_proxies()
+    if proxies:
+        req_kwargs["proxies"] = proxies
+    req_kwargs.setdefault("timeout", 15)
+    req_kwargs.setdefault("impersonate", "chrome110")
+    try:
+        resp = cf_requests.get(url, **req_kwargs)
+        if not _flaresolverr_enabled() or not _is_cloudflare_blocked(resp):
+            return resp
+    except Exception:
+        if not _flaresolverr_enabled():
+            raise
+    # FlareSolverr 回退
+    fs_resp = flaresolverr_get(url)
+    if fs_resp is not None:
+        return fs_resp
+    raise Exception(f"FlareSolverr 回退失败: {url}")
+
+
+def http_post_with_fallback(url, **kwargs):
+    """POST 请求，Cloudflare 拦截时自动回退 FlareSolverr"""
+    from curl_cffi import requests as cf_requests
+    req_kwargs = dict(kwargs)
+    proxies = req_kwargs.pop("proxies", None)
+    if proxies is None:
+        proxies = get_proxies()
+    if proxies:
+        req_kwargs["proxies"] = proxies
+    req_kwargs.setdefault("timeout", 15)
+    req_kwargs.setdefault("impersonate", "chrome110")
+    try:
+        resp = cf_requests.post(url, **req_kwargs)
+        if not _flaresolverr_enabled() or not _is_cloudflare_blocked(resp):
+            return resp
+    except Exception:
+        if not _flaresolverr_enabled():
+            raise
+    # FlareSolverr 回退
+    post_data = req_kwargs.get("data") or req_kwargs.get("json") or ""
+    fs_resp = flaresolverr_post(url, post_data)
+    if fs_resp is not None:
+        return fs_resp
+    raise Exception(f"FlareSolverr 回退失败: {url}")
+
+
 def get_duckmail_api_key():
     return config.get("duckmail_api_key", "")
 

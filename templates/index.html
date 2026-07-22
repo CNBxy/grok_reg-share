@@ -631,7 +631,7 @@ const CONFIG_SECTIONS = {
   "freemail_api_url", "freemail_api_token"
   ],
   "网络与浏览器": [
-    "proxy", "cpa_proxy", "user_agent", "enable_nsfw"
+    "proxy", "flaresolverr_enabled", "flaresolverr_url", "cpa_proxy", "user_agent", "enable_nsfw"
   ],
   "CPA 凭证生成": [
     "cpa_export_enabled", "cpa_auth_dir", "cpa_copy_to_hotload", "cpa_hotload_dir",
@@ -679,6 +679,8 @@ const CONFIG_LABELS = {
   "freemail_api_url": "FreeMail 服务端地址",
   "freemail_api_token": "FreeMail API 密钥",
   "proxy": "注册主代理（可留空）",
+  "flaresolverr_enabled": "开启 FlareSolverr 自动回退（Cloudflare 拦截时）",
+  "flaresolverr_url": "FlareSolverr 服务地址",
   "cpa_proxy": "CPA/OIDC 专用代理（可留空）",
   "user_agent": "浏览器 User-Agent",
   "enable_nsfw": "注册后通过 grok2api 开启 NSFW",
@@ -829,7 +831,7 @@ function renderConfig(cfg) {
     const renderKeys = [];
     for (const k of keys) {
       if (k in cfg) renderKeys.push(k);
-      else if (k === 'email_provider' || ALL_PROVIDER_KEYS.includes(k) || k.startsWith('openai_cpa_') || k.startsWith('cloudmail_') || k.startsWith('cloudflare_') || k.startsWith('duckmail_') || k.startsWith('yyds_') || k.startsWith('freemail_')) {
+      else if (k === 'email_provider' || ALL_PROVIDER_KEYS.includes(k) || k.startsWith('openai_cpa_') || k.startsWith('cloudmail_') || k.startsWith('cloudflare_') || k.startsWith('duckmail_') || k.startsWith('yyds_') || k.startsWith('freemail_') || k.startsWith('flaresolverr_')) {
         if (!(k in cfg)) cfg[k] = (typeof currentConfig[k] !== 'undefined') ? currentConfig[k] : '';
         if (k in cfg) renderKeys.push(k);
       }

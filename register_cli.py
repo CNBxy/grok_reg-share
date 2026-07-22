@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import grok_register_ttk as reg  # noqa: E402
 
+_stop_event = threading.Event()
 
 # Linux 适配: DrissionPage 默认找 'chrome', 我们装的是 chromium
 # 保留原版 slim flags + proxy，再补 chromium 路径与 turnstilePatch。
@@ -199,7 +200,7 @@ def register_one(
     email = ""
     dev_token = ""
     max_mail_retry = 3
-    cancel = DummyStop()
+    cancel = lambda: _stop_event.is_set()
 
     try:
         _ensure_browser(worker_id, force_recycle=False)
@@ -229,6 +230,10 @@ def register_one(
             break
         except Exception as exc:
             msg = str(exc)
+            if _stop_event.is_set():
+                log(worker_id, "! 用户停止注册")
+                reg.stop_interval_screenshot()
+                return None
             if ("未收到验证码" in msg or "验证码" in msg) and mail_try < max_mail_retry:
                 log(worker_id, f"! 本邮箱未取到验证码，换邮箱重试: {msg}")
                 try:
@@ -323,6 +328,10 @@ def register_one(
         reg.stop_interval_screenshot()
         return job
     except Exception as exc:
+        if _stop_event.is_set():
+            log(worker_id, "! 用户停止注册")
+            reg.stop_interval_screenshot()
+            return None
         log(worker_id, f"! 注册失败: {exc}")
         reg.mark_error(email or "", reason=str(exc)[:120])
         traceback.print_exc()
@@ -386,6 +395,8 @@ def _register_worker(
     do_mint_inline: bool,
 ):
     while True:
+        if _stop_event.is_set():
+            break
         try:
             idx = task_queue.get_nowait()
         except queue.Empty:
@@ -400,6 +411,8 @@ def _register_worker(
 
         retry = 0
         while retry < 2:
+            if _stop_event.is_set():
+                break
             try:
                 result = register_one(
                     worker_id,
@@ -409,6 +422,8 @@ def _register_worker(
                     do_mint_inline=do_mint_inline,
                     mint_queue=mint_queue,
                 )
+                if _stop_event.is_set():
+                    break
                 if result:
                     break
                 retry += 1
@@ -419,6 +434,8 @@ def _register_worker(
                     except Exception:
                         pass
             except Exception:
+                if _stop_event.is_set():
+                    break
                 retry += 1
                 if retry < 2:
                     log(worker_id, f"[retry] 账号 {idx} 异常，重试 {retry}/1")

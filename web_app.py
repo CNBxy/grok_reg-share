@@ -326,6 +326,7 @@ def _run_registration(extra: int, threads: int):
         log_cb(f"[Web] 开始批量注册任务: 数量={extra}, 线程={threads}")
         import register_cli as cli
         import grok_register_ttk as reg
+        cli._stop_event.clear()
         reg.load_config()
         cfg = getattr(reg, "config", {}) or {}
         threads = max(1, min(threads, 10))
@@ -375,6 +376,7 @@ def _run_registration(extra: int, threads: int):
             while t.is_alive():
                 if _cancel_event.is_set():
                     log_cb("[Web] 收到取消信号，正在等待当前浏览器会话结束...")
+                    cli._stop_event.set()
                     break
                 t.join(timeout=1.0)
             if _cancel_event.is_set():
@@ -395,6 +397,10 @@ def _run_registration(extra: int, threads: int):
         log_cb(f"[!] 任务异常: {exc}")
         log_cb(traceback.format_exc())
     finally:
+        try:
+            cli.log = original_log
+        except NameError:
+            pass
         with _run_lock:
             _running = False
         _broadcast(dict(ts=time.strftime("%H:%M:%S"), msg="__DONE__"))

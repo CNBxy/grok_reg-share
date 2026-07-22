@@ -702,7 +702,7 @@ def _grok2api_find_account_id(email, base_url, mgmt_key, log_callback=None, retr
     if mgmt_key:
         headers["Authorization"] = f"Bearer {mgmt_key}"
     url = f"{base_url}/api/admin/v1/accounts"
-    params = {"search": email, "provider": "web", "pageSize": 5}
+    params = {"search": email, "provider": "grok_web", "pageSize": 5}
     last_exc = None
     for attempt in range(1, retries + 1):
         try:

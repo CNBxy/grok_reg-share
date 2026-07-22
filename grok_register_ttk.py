@@ -3111,27 +3111,26 @@ def strip_email_addresses(text):
 
 
 def extract_verification_code(text, subject=""):
-    """CPA 内存池 _extract_otp_code + XXX-XXX 格式支持"""
-    content = f"{subject}\n{text}" if subject else text
     if subject:
-        m = re.search(r"([A-Z0-9]{3}-[A-Z0-9]{3})", subject, re.IGNORECASE)
-        if m:
-            return m.group(1)
-    m = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", content, re.IGNORECASE)
-    if m:
-        return m.group(1)
+        match = re.search(r"([A-Z0-9]{3}-[A-Z0-9]{3})", subject, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    match = re.search(r"\b([A-Z0-9]{3}-[A-Z0-9]{3})\b", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?<![\d#])(\d{6})(?!\d)", f"{subject}\n{text}")
+    if match:
+        return match.group(1)
     patterns = [
-        r"(?i)Your (?:ChatGPT|OpenAI) code is\s*(\d{6})",
-        r"(?i)(?:ChatGPT|OpenAI) code is\s*(\d{6})",
-        r"(?i)verification code to continue:\s*(\d{6})",
-        r"(?i)enter this code:\s*(\d{6})",
+        r"verification\s+code[:\s]+(\d{4,8})",
+        r"your\s+code[:\s]+(\d{4,8})",
+        r"confirm(?:ation)?\s+code[:\s]+(\d{4,8})",
     ]
-    for p in patterns:
-        m = re.search(p, content)
-        if m:
-            return m.group(1)
-    fallback = re.search(r"(?<![\d#])(\d{6})(?!\d)", content)
-    return fallback.group(1) if fallback else None
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
 
 
 def duckmail_get_oai_code(

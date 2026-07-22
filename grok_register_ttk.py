@@ -2041,7 +2041,7 @@ def inboxes_com_get_oai_code(
             sender = str(m.get("f", "")).lower()
             if log_callback:
                 log_callback(f"[Debug] Inboxes.com 发现邮件: uid={m_id}, from={sender}, subject={subject}")
-            if "openai" not in sender and "openai" not in subject.lower() and "chatgpt" not in subject.lower():
+            if not _is_verification_email(sender, subject):
                 continue
             try:
                 raw_body = inboxes_com_get_message_body(m_id, user_id=dev_token)
@@ -2155,7 +2155,7 @@ def tempmail_lol_get_oai_code(
             html = str(msg.get("html") or "")
             clean_html = clean_html_to_text(html)
             content = "\n".join([sender, subject, body, clean_html])
-            if "openai" not in sender and "openai" not in content.lower():
+            if not _is_verification_email(sender, subject):
                 continue
             safe_content = strip_email_addresses(content)
             code = extract_verification_code(safe_content, subject)
@@ -2525,7 +2525,7 @@ def catchmail_get_oai_code(
             combined = f"{sender}\n{subject}"
             if log_callback:
                 log_callback(f"[Debug] Catchmail.io 发现邮件: id={msg_id}, from={sender}, subject={subject}")
-            if "openai" not in combined.lower():
+            if not _is_verification_email(sender, subject):
                 continue
             code = extract_verification_code(strip_email_addresses(combined), subject)
             if code:
@@ -2682,7 +2682,7 @@ def guerrilla_get_oai_code(
             combined = f"{sender}\n{subject}"
             if log_callback:
                 log_callback(f"[Debug] Guerrilla Mail 发现邮件: from={sender}, subject={subject}")
-            if "openai" not in combined.lower():
+            if not _is_verification_email(sender, subject):
                 continue
             code = extract_verification_code(strip_email_addresses(combined), subject)
             if code:
@@ -2853,7 +2853,7 @@ def mailtm_get_oai_code(
             sender = str(msg.get("from", {}).get("address", "")).lower()
             subject = str(msg.get("subject", ""))
             combined = f"{sender}\n{subject}"
-            if "openai" not in combined.lower():
+            if not _is_verification_email(sender, subject):
                 continue
             code = extract_verification_code(strip_email_addresses(combined), subject)
             if code:
@@ -2879,6 +2879,12 @@ def mailtm_get_oai_code(
 
 
 # ──────────────────────── 公共邮箱工具 ────────────────────────
+
+def _is_verification_email(sender, subject):
+    """判断是否为验证码邮件（兼容 OpenAI / xAI / Grok 等）"""
+    text = f"{sender} {subject}".lower()
+    return any(kw in text for kw in ("openai", "chatgpt", "xai", "x.ai", "grok", "spacexai", "verification", "confirmation code"))
+
 
 def get_email_provider():
     return config.get("email_provider", "duckmail")

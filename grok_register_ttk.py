@@ -2686,14 +2686,21 @@ def mailtm_create_email():
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
     session = cf_requests.Session(impersonate="chrome110")
+    session.headers.update({
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    })
     if proxies:
         session.proxies.update(proxies)
 
     # 1. 获取可用域名
     resp = session.get(f"{MAIL_TM_API_BASE}/domains", timeout=15)
     if resp.status_code != 200:
-        raise Exception(f"Mail.tm 获取域名失败 (HTTP {resp.status_code})")
-    domains = resp.json().get("hydra:member", [])
+        raise Exception(f"Mail.tm 获取域名失败 (HTTP {resp.status_code}): {resp.text[:200]}")
+    try:
+        domains = resp.json().get("hydra:member", [])
+    except Exception as exc:
+        raise Exception(f"Mail.tm 域名响应解析失败: {exc}, body={resp.text[:200]}")
     if not domains:
         raise Exception("Mail.tm 无可用域名")
     domain = domains[0].get("domain")
@@ -2710,7 +2717,7 @@ def mailtm_create_email():
         timeout=15,
     )
     if resp.status_code not in (200, 201):
-        raise Exception(f"Mail.tm 创建账号失败 (HTTP {resp.status_code}): {resp.text}")
+        raise Exception(f"Mail.tm 创建账号失败 (HTTP {resp.status_code}): {resp.text[:200]}")
 
     # 3. 获取 JWT token
     resp = session.post(
@@ -2719,11 +2726,15 @@ def mailtm_create_email():
         timeout=15,
     )
     if resp.status_code == 200:
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise Exception(f"Mail.tm token 响应解析失败: {exc}, body={resp.text[:200]}")
         token = data.get("token", "")
         if token:
             return address, token
-    raise Exception("Mail.tm 获取 token 失败")
+        raise Exception(f"Mail.tm token 为空, response={resp.text[:200]}")
+    raise Exception(f"Mail.tm 获取 token 失败 (HTTP {resp.status_code}): {resp.text[:200]}")
 
 
 def mailtm_get_inbox(token):
@@ -2735,13 +2746,16 @@ def mailtm_get_inbox(token):
 
     resp = cf_requests.get(
         f"{MAIL_TM_API_BASE}/messages",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         proxies=proxies,
         timeout=15,
         impersonate="chrome110",
     )
     if resp.status_code == 200:
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception:
+            return []
         return data.get("hydra:member", [])
     return []
 
@@ -2755,13 +2769,16 @@ def mailtm_get_message_detail(message_id, token):
 
     resp = cf_requests.get(
         f"{MAIL_TM_API_BASE}/messages/{message_id}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         proxies=proxies,
         timeout=15,
         impersonate="chrome110",
     )
     if resp.status_code == 200:
-        return resp.json()
+        try:
+            return resp.json()
+        except Exception:
+            return None
     return None
 
 

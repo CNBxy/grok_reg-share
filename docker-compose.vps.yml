@@ -72,29 +72,6 @@ services:
     networks:
       - grok_internal
 
-  caddy:
-    image: caddy:2.10-alpine
-    depends_on:
-      app:
-        condition: service_healthy
-    environment:
-      DOMAIN: ${DOMAIN:?DOMAIN must be set in .env.vps}
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./deploy/vps/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    restart: unless-stopped
-    networks:
-      - grok_internal
-
 networks:
   grok_internal:
     driver: bridge
-
-volumes:
-  caddy_data:
-  caddy_config:

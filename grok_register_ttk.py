@@ -2052,6 +2052,8 @@ def inboxes_com_get_oai_code(
                 clean_body = unescape(clean_body)
                 clean_body = re.sub(r"\s+", " ", clean_body).strip()
                 combined_text = subject + " \n " + clean_body
+                if log_callback:
+                    log_callback(f"[Debug] Inboxes.com 邮件正文前300字: {combined_text[:300]}")
             except Exception as exc:
                 if log_callback:
                     log_callback(f"[Debug] Inboxes.com 获取邮件详情失败: {exc}")
@@ -3093,14 +3095,15 @@ def get_oai_code(
 def extract_verification_code(text, subject=""):
     content = f"{subject}\n{text}" if subject else text
     patterns = [
-        r"(?i)Your (?:ChatGPT|OpenAI) code is\s*(\d{6})",
-        r"(?i)(?:ChatGPT|OpenAI) code is\s*(\d{6})",
-        r"(?i)verification code to continue:\s*(\d{6})",
-        r"(?i)Subject:.*?(\d{6})",
-        r"(?i)enter this code:\s*(\d{6})",
-        r"(?i)verification\s+code[:\s]+(\d{6})",
-        r"(?i)your\s+code[:\s]+(\d{6})",
-        r"(?i)confirm(?:ation)?\s+code[:\s]+(\d{6})",
+        r"(?i)Your (?:ChatGPT|OpenAI|xAI|X\.ai) code is\s*(\d{4,8})",
+        r"(?i)(?:ChatGPT|OpenAI|xAI|X\.ai) code is\s*(\d{4,8})",
+        r"(?i)verification code to continue:\s*(\d{4,8})",
+        r"(?i)enter this code:\s*(\d{4,8})",
+        r"(?i)verification\s+code[:\s]+(\d{4,8})",
+        r"(?i)your\s+code[:\s]+(\d{4,8})",
+        r"(?i)confirm(?:ation)?\s+code[:\s]+(\d{4,8})",
+        r"(?i)code\s+is[:\s]+(\d{4,8})",
+        r"(?i)use\s+(?:this\s+)?(?:code|pin)[:\s]+(\d{4,8})",
     ]
     for p in patterns:
         m = re.search(p, content)

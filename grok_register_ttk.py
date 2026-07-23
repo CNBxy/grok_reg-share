@@ -2055,6 +2055,8 @@ def generator_email_get_inbox_links(surl, log_callback=None):
         return []
 
     html = resp.text or ""
+    if log_callback:
+        log_callback(f"[Debug] GeneratorEmail 收件箱HTML片段: {html[:2000]}")
     pattern = r'<a href="([^"]+)"[^>]*>([\s\S]*?)</a>'
     links = re.findall(pattern, html)
     results = []

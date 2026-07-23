@@ -2049,14 +2049,10 @@ def generator_email_get_inbox_links(surl, log_callback=None):
         impersonate="chrome110",
         http_version=CurlHttpVersion.V1_1,
     )
-    if log_callback:
-        log_callback(f"[Debug] GeneratorEmail 收件箱 HTTP {resp.status_code}, 长度 {len(resp.text or '')}")
     if resp.status_code != 200:
         return [], None
 
     html = resp.text or ""
-    if log_callback:
-        log_callback(f"[Debug] GeneratorEmail 收件箱HTML片段: {html[:2000]}")
 
     # 从 title 提取验证码（generator.email 收到邮件时 title 会变为 "SpaceXAI confirmation code: XXX-XXX"）
     title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
@@ -3763,12 +3759,6 @@ return String(cfInput.value || '').trim().length;
         if submit_state == "submitted":
             if log_callback:
                 log_callback(f"[*] 已填写注册资料并提交: {given_name} {family_name}")
-            human_sleep(2, cancel_callback)
-            try:
-                if log_callback:
-                    log_callback(f"[*] 提交后URL: {page.url}")
-            except Exception:
-                pass
             return {"given_name": given_name, "family_name": family_name, "password": password}
         wait_cf_since = None
         if submit_state == "no-submit-button" and log_callback:
@@ -3911,8 +3901,6 @@ def wait_for_sso_cookie(timeout=120, log_callback=None, cancel_callback=None):
     last_seen_names = set()
     last_submit_retry = 0.0
     last_cf_retry_at = 0.0
-    last_url_log = 0.0
-    last_mid_check = 0.0
 
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
@@ -3922,17 +3910,8 @@ def wait_for_sso_cookie(timeout=120, log_callback=None, cancel_callback=None):
                 human_sleep(1, cancel_callback)
                 continue
 
-            # 每 10 秒记录当前 URL 和页面状态
+            # 仍停留在“完成注册”页时，若 Cloudflare 已通过，周期性重试点击提交
             now = time.time()
-            if log_callback and now - last_url_log >= 10:
-                try:
-                    cur_url = page.url or "unknown"
-                    log_callback(f"[Debug] SSO等待中 URL: {cur_url}")
-                except Exception:
-                    pass
-                last_url_log = now
-
-            # 仍停留在"完成注册"页时，若 Cloudflare 已通过，周期性重试点击提交
             if now - last_submit_retry >= 2.5:
                 retried = page.run_js(
                     r"""
@@ -4016,122 +3995,14 @@ return String(cfInput.value || '').trim().length;
                 if name:
                     last_seen_names.add(name)
 
-                if name in ("sso", "sso-rw") and value:
+                if name == "sso" and value:
                     if log_callback:
-                        log_callback(f"[*] 已获取到 {name} cookie")
+                        log_callback("[*] 已获取到 sso cookie")
                     return value
-
-            # 页面已跳转但 sso 尚未出现 —— 检测中间页（TOS/consent）并自动处理
-            if now - last_mid_check >= 5:
-                try:
-                    mid_state = page.run_js(
-                        r"""
-const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-const url = location.href;
-
-// TOS / 隐私政策 / consent 页面
-const tosKeywords = ['Terms of Service', 'Privacy Policy', 'I agree', 'I accept',
-    'Accept', 'Agree', '继续', '同意', '服务条款', '隐私'];
-const isTos = tosKeywords.some(k => body.includes(k));
-
-// loading / verifying 页面
-const isLoading = body.includes('Verifying') || body.includes('Loading')
-    || body.includes('请稍候') || body.includes('验证中');
-
-// 账号已存在 / 错误页面
-const isError = body.includes('already exists') || body.includes('已存在')
-    || body.includes('Something went wrong') || body.includes('出错了');
-
-// 仍在注册页（表单提交未跳转）
-const isSignUp = url.includes('/sign-up');
-
-// 仍有完成注册按钮（提交未成功）
-function isVisible(node) {
-    if (!node) return false;
-    const style = window.getComputedStyle(node);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-    const rect = node.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-}
-const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
-    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
-});
-const submitBtn = buttons.find((node) => {
-    const t = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
-    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
-});
-const hasSubmitBtn = !!submitBtn;
-
-const title = document.title || '';
-return JSON.stringify({url, title, bodySnippet: body.slice(0, 300), isTos, isLoading, isError, isSignUp, hasSubmitBtn});
-                        """
-                    )
-                    if isinstance(mid_state, str):
-                        import json as _json
-                        try:
-                            info = _json.loads(mid_state)
-                        except Exception:
-                            info = {}
-                        if log_callback:
-                            log_callback(
-                                f"[Debug] 中间页检测 url={info.get('url','?')} "
-                                f"isSignUp={info.get('isSignUp')} hasSubmitBtn={info.get('hasSubmitBtn')} "
-                                f"isTos={info.get('isTos')} isLoading={info.get('isLoading')} "
-                                f"isError={info.get('isError')} snippet={info.get('bodySnippet','')[:120]}"
-                            )
-                        if info.get("isTos"):
-                            clicked = page.run_js(
-                                r"""
-const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
-const target = btns.find(n => {
-    const t = (n.innerText || n.value || '').replace(/\s+/g,'').toLowerCase();
-    return t.includes('agree') || t.includes('accept') || t.includes('continue')
-        || t.includes('同意') || t.includes('继续') || t.includes('接受');
-});
-if (target) { target.click(); return 'clicked'; }
-return 'no-btn';
-                            """
-                            )
-                            if log_callback:
-                                log_callback(f"[Debug] TOS 页面自动点击: {clicked}")
-                        elif info.get("isSignUp") and info.get("hasSubmitBtn"):
-                            clicked = page.run_js(
-                                r"""
-function isVisible(node) {
-    if (!node) return false;
-    const style = window.getComputedStyle(node);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-    const rect = node.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-}
-const cfInput = document.querySelector('input[name="cf-turnstile-response"]');
-const cfPresent = !!cfInput
-  || !!document.querySelector('iframe[src*="turnstile"], div.cf-turnstile, [data-sitekey], script[src*="turnstile"]');
-if (cfPresent) {
-    const token = String((cfInput && cfInput.value) || '').trim();
-    if (token.length < 80) return 'wait-cf:' + token.length;
-}
-const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
-    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
-});
-const submitBtn = buttons.find((node) => {
-    const t = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
-    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
-});
-if (submitBtn) { submitBtn.focus(); submitBtn.click(); return 'retried-submit'; }
-return 'no-btn';
-                            """
-                            )
-                            if log_callback:
-                                log_callback(f"[Debug] 仍在注册页且有提交按钮，自动重试: {clicked}")
-                except Exception:
-                    pass
-                last_mid_check = now
         except PageDisconnectedError:
             refresh_active_page()
-        except Exception as e:
-            if log_callback:
-                log_callback(f"[Debug] SSO等待异常: {e}")
+        except Exception:
+            pass
 
         human_sleep(1, cancel_callback)
 

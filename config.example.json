@@ -46,6 +46,8 @@
   "proxy": "http://127.0.0.1:7890",
   "// flaresolverr_enabled": "开启 FlareSolverr 自动回退：正常走 proxy，遇到 Cloudflare 拦截时自动切换 FlareSolverr 解决",
   "flaresolverr_enabled": false,
+  "// flaresolverr_always": "始终通过 FlareSolverr 发送所有 HTTP 请求（不走直连）",
+  "flaresolverr_always": false,
   "// flaresolverr_url": "FlareSolverr 服务地址。Docker 部署填 http://flaresolverr:8191",
   "flaresolverr_url": "http://flaresolverr:8191",
   "// user_agent": "Chromium UA；一般保持默认 Chrome 桌面串即可。",

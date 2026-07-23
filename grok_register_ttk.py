@@ -527,6 +527,10 @@ def _flaresolverr_enabled():
     return bool(config.get("flaresolverr_enabled", False))
 
 
+def _flaresolverr_always():
+    return bool(config.get("flaresolverr_always", False))
+
+
 def _flaresolverr_url():
     return str(config.get("flaresolverr_url", "") or "").rstrip("/")
 
@@ -681,8 +685,13 @@ def flaresolverr_post(url, post_data, session_id=None, **kwargs):
 
 
 def http_get_with_fallback(url, **kwargs):
-    """GET 请求，Cloudflare 拦截时自动回退 FlareSolverr"""
+    """GET 请求，flaresolverr_always 时全部走 FlareSolverr，否则 Cloudflare 拦截时回退"""
     from curl_cffi import requests as cf_requests
+    if _flaresolverr_enabled() and _flaresolverr_always():
+        fs_resp = flaresolverr_get(url)
+        if fs_resp is not None:
+            return fs_resp
+        raise Exception(f"FlareSolverr 请求失败: {url}")
     req_kwargs = dict(kwargs)
     proxies = req_kwargs.pop("proxies", None)
     if proxies is None:
@@ -706,8 +715,14 @@ def http_get_with_fallback(url, **kwargs):
 
 
 def http_post_with_fallback(url, **kwargs):
-    """POST 请求，Cloudflare 拦截时自动回退 FlareSolverr"""
+    """POST 请求，flaresolverr_always 时全部走 FlareSolverr，否则 Cloudflare 拦截时回退"""
     from curl_cffi import requests as cf_requests
+    if _flaresolverr_enabled() and _flaresolverr_always():
+        post_data = kwargs.get("data") or kwargs.get("json") or ""
+        fs_resp = flaresolverr_post(url, post_data)
+        if fs_resp is not None:
+            return fs_resp
+        raise Exception(f"FlareSolverr 请求失败: {url}")
     req_kwargs = dict(kwargs)
     proxies = req_kwargs.pop("proxies", None)
     if proxies is None:

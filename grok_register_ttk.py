@@ -2025,7 +2025,7 @@ def generator_email_create_email():
 
 
 def generator_email_get_inbox_links(surl, log_callback=None):
-    """获取 generator.email 收件箱中的邮件链接列表，同时检查 title 中的验证码"""
+    """获取 generator.email 收件箱，优先从 title 提取验证码"""
     from curl_cffi import requests as cf_requests
     from curl_cffi import CurlHttpVersion
 
@@ -2058,24 +2058,18 @@ def generator_email_get_inbox_links(surl, log_callback=None):
     if log_callback:
         log_callback(f"[Debug] GeneratorEmail 收件箱HTML片段: {html[:2000]}")
 
-    # 优先从 title 提取验证码（generator.email 收件件到邮件时 title 会包含验证码）
+    # 从 title 提取验证码（generator.email 收到邮件时 title 会变为 "SpaceXAI confirmation code: XXX-XXX"）
     title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
     title_text = title_match.group(1).strip() if title_match else ""
     title_code = extract_verification_code(title_text, title_text) if title_text else None
     if title_code:
         if log_callback:
-            log_callback(f"[*] GeneratorEmail 从 title 直接提取到验证码: {title_code} (title={title_text!r})")
+            log_callback(f"[*] GeneratorEmail 从 title 提取到验证码: {title_code} (title={title_text!r})")
         return [], title_code
 
-    pattern = r'<a href="([^"]+)"[^>]*>([\s\S]*?)</a>'
-    links = re.findall(pattern, html)
-    results = []
-    for href, _inner_html in links:
-        m_id = href.split("/")[-1]
-        results.append({"href": href, "id": m_id})
     if log_callback:
-        log_callback(f"[Debug] GeneratorEmail 解析到 {len(results)} 个链接")
-    return results, None
+        log_callback(f"[Debug] GeneratorEmail title中无验证码: {title_text!r}，等待邮件到达")
+    return [], None
 
 
 def generator_email_get_code_from_detail(href, surl):
@@ -2141,47 +2135,23 @@ def generator_email_get_oai_code(
     log_callback=None,
     cancel_callback=None,
 ):
-    """generator.email 轮询验证码"""
+    """generator.email 轮询验证码（从 title 提取）"""
     deadline = time.time() + timeout
-    seen_ids = set()
     poll_count = 0
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
         poll_count += 1
         try:
-            mail_links, title_code = generator_email_get_inbox_links(dev_token, log_callback=log_callback)
+            _, title_code = generator_email_get_inbox_links(dev_token, log_callback=log_callback)
             if title_code:
                 if log_callback:
                     log_callback(f"[*] GeneratorEmail 轮询#{poll_count} 从 title 获取到验证码: {title_code}")
                 return title_code
             if log_callback:
-                log_callback(f"[Debug] GeneratorEmail 轮询#{poll_count} 收件箱链接数: {len(mail_links)}")
+                log_callback(f"[Debug] GeneratorEmail 轮询#{poll_count} 等待邮件到达...")
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] GeneratorEmail 拉取邮件列表失败: {exc}")
-            sleep_with_cancel(poll_interval, cancel_callback)
-            continue
-        for item in mail_links:
-            m_id = item.get("id")
-            m_href = item.get("href")
-            if not m_id or m_id in seen_ids:
-                continue
-            seen_ids.add(m_id)
-            if log_callback:
-                log_callback(f"[Debug] GeneratorEmail 发现新邮件: id={m_id}, href={m_href}")
-            try:
-                code = generator_email_get_code_from_detail(m_href, dev_token)
-            except Exception as exc:
-                if log_callback:
-                    log_callback(f"[Debug] GeneratorEmail 获取邮件详情失败: {exc}")
-                continue
-            if code:
-                if log_callback:
-                    log_callback(f"[*] GeneratorEmail 从邮件中提取到验证码: {code}")
-                return code
-            else:
-                if log_callback:
-                    log_callback(f"[Debug] GeneratorEmail 邮件 id={m_id} 未提取到验证码")
         sleep_with_cancel(poll_interval, cancel_callback)
     raise Exception(f"GeneratorEmail 在 {timeout}s 内未收到验证码邮件")
 

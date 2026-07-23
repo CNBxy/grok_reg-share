@@ -4692,8 +4692,28 @@ const isLoading = body.includes('Verifying') || body.includes('Loading')
 const isError = body.includes('already exists') || body.includes('已存在')
     || body.includes('Something went wrong') || body.includes('出错了');
 
+// 仍在注册页（表单提交未跳转）
+const isSignUp = url.includes('/sign-up');
+
+// 仍有完成注册按钮（提交未成功）
+function isVisible(node) {
+    if (!node) return false;
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
+    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
+});
+const submitBtn = buttons.find((node) => {
+    const t = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
+});
+const hasSubmitBtn = !!submitBtn;
+
 const title = document.title || '';
-return JSON.stringify({url, title, bodySnippet: body.slice(0, 300), isTos, isLoading, isError});
+return JSON.stringify({url, title, bodySnippet: body.slice(0, 300), isTos, isLoading, isError, isSignUp, hasSubmitBtn});
                         """
                     )
                     if isinstance(mid_state, str):
@@ -4705,6 +4725,7 @@ return JSON.stringify({url, title, bodySnippet: body.slice(0, 300), isTos, isLoa
                         if log_callback:
                             log_callback(
                                 f"[Debug] 中间页检测 url={info.get('url','?')} "
+                                f"isSignUp={info.get('isSignUp')} hasSubmitBtn={info.get('hasSubmitBtn')} "
                                 f"isTos={info.get('isTos')} isLoading={info.get('isLoading')} "
                                 f"isError={info.get('isError')} snippet={info.get('bodySnippet','')[:120]}"
                             )
@@ -4723,6 +4744,36 @@ return 'no-btn';
                             )
                             if log_callback:
                                 log_callback(f"[Debug] TOS 页面自动点击: {clicked}")
+                        elif info.get("isSignUp") and info.get("hasSubmitBtn"):
+                            clicked = page.run_js(
+                                r"""
+function isVisible(node) {
+    if (!node) return false;
+    const style = window.getComputedStyle(node);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+}
+const cfInput = document.querySelector('input[name="cf-turnstile-response"]');
+const cfPresent = !!cfInput
+  || !!document.querySelector('iframe[src*="turnstile"], div.cf-turnstile, [data-sitekey], script[src*="turnstile"]');
+if (cfPresent) {
+    const token = String((cfInput && cfInput.value) || '').trim();
+    if (token.length < 80) return 'wait-cf:' + token.length;
+}
+const buttons = Array.from(document.querySelectorAll('button[type="submit"], button')).filter((node) => {
+    return isVisible(node) && !node.disabled && node.getAttribute('aria-disabled') !== 'true';
+});
+const submitBtn = buttons.find((node) => {
+    const t = (node.innerText || node.textContent || '').replace(/\s+/g, '').toLowerCase();
+    return t.includes('完成注册') || t.includes('创建账户') || t.includes('sign up') || t.includes('createaccount') || t.includes('completesignup');
+});
+if (submitBtn) { submitBtn.focus(); submitBtn.click(); return 'retried-submit'; }
+return 'no-btn';
+                            """
+                            )
+                            if log_callback:
+                                log_callback(f"[Debug] 仍在注册页且有提交按钮，自动重试: {clicked}")
                 except Exception:
                     pass
                 last_submit_retry = now

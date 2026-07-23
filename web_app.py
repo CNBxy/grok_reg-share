@@ -579,13 +579,9 @@ def api_test_mail():
             "duckmail": ["duckmail_api_key"],
             "yyds": ["yyds_api_key"],
             "generator_email": [],
-            "inboxes": [],
             "tempmail": [],
             "tempmail_org": [],
-            "freemail": ["freemail_api_url"],
-            "catchmail": [],
             "guerrilla": [],
-            "mailtm": [],
         }.get(provider, [])
         missing = [k for k in required if not str(cfg.get(k) or "").strip()]
         if missing:

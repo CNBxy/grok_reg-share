@@ -2024,7 +2024,7 @@ def generator_email_create_email():
     return email, surl
 
 
-def generator_email_get_inbox_links(surl):
+def generator_email_get_inbox_links(surl, log_callback=None):
     """获取 generator.email 收件箱中的邮件链接列表"""
     from curl_cffi import requests as cf_requests
     from curl_cffi import CurlHttpVersion
@@ -2049,6 +2049,8 @@ def generator_email_get_inbox_links(surl):
         impersonate="chrome110",
         http_version=CurlHttpVersion.V1_1,
     )
+    if log_callback:
+        log_callback(f"[Debug] GeneratorEmail 收件箱 HTTP {resp.status_code}, 长度 {len(resp.text or '')}")
     if resp.status_code != 200:
         return []
 
@@ -2059,6 +2061,8 @@ def generator_email_get_inbox_links(surl):
     for href, _inner_html in links:
         m_id = href.split("/")[-1]
         results.append({"href": href, "id": m_id})
+    if log_callback:
+        log_callback(f"[Debug] GeneratorEmail 解析到 {len(results)} 个链接")
     return results
 
 
@@ -2096,13 +2100,15 @@ def generator_email_get_code_from_detail(href, surl):
         return None
 
     raw_html = resp.text or ""
+    subject_match = re.search(r'<title[^>]*>([^<]+)</title>', raw_html, re.I)
+    subject = subject_match.group(1).strip() if subject_match else ""
     clean_text = clean_html_to_text(raw_html)
     clean_text = re.sub(r"\s+", " ", clean_text).strip()
     clean_text = strip_email_addresses(clean_text)
-    code = extract_verification_code(clean_text)
+    code = extract_verification_code(clean_text, subject)
     if not code:
         import logging
-        logging.warning(f"[GeneratorEmail] 无法提取验证码，清理后内容前500字: {clean_text[:500]}")
+        logging.warning(f"[GeneratorEmail] 无法提取验证码，subject={subject!r}，清理后内容前500字: {clean_text[:500]}")
     return code
 
 
@@ -2126,10 +2132,14 @@ def generator_email_get_oai_code(
     """generator.email 轮询验证码"""
     deadline = time.time() + timeout
     seen_ids = set()
+    poll_count = 0
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
+        poll_count += 1
         try:
-            mail_links = generator_email_get_inbox_links(dev_token)
+            mail_links = generator_email_get_inbox_links(dev_token, log_callback=log_callback)
+            if log_callback:
+                log_callback(f"[Debug] GeneratorEmail 轮询#{poll_count} 收件箱链接数: {len(mail_links)}")
         except Exception as exc:
             if log_callback:
                 log_callback(f"[Debug] GeneratorEmail 拉取邮件列表失败: {exc}")
@@ -2141,6 +2151,8 @@ def generator_email_get_oai_code(
             if not m_id or m_id in seen_ids:
                 continue
             seen_ids.add(m_id)
+            if log_callback:
+                log_callback(f"[Debug] GeneratorEmail 发现新邮件: id={m_id}, href={m_href}")
             try:
                 code = generator_email_get_code_from_detail(m_href, dev_token)
             except Exception as exc:
@@ -2151,6 +2163,9 @@ def generator_email_get_oai_code(
                 if log_callback:
                     log_callback(f"[*] GeneratorEmail 从邮件中提取到验证码: {code}")
                 return code
+            else:
+                if log_callback:
+                    log_callback(f"[Debug] GeneratorEmail 邮件 id={m_id} 未提取到验证码")
         sleep_with_cancel(poll_interval, cancel_callback)
     raise Exception(f"GeneratorEmail 在 {timeout}s 内未收到验证码邮件")
 
@@ -4397,6 +4412,12 @@ return String(cfInput.value || '').trim().length;
         if submit_state == "submitted":
             if log_callback:
                 log_callback(f"[*] 已填写注册资料并提交: {given_name} {family_name}")
+            human_sleep(2, cancel_callback)
+            try:
+                if log_callback:
+                    log_callback(f"[*] 提交后URL: {page.url}")
+            except Exception:
+                pass
             return {"given_name": given_name, "family_name": family_name, "password": password}
         wait_cf_since = None
         if submit_state == "no-submit-button" and log_callback:
@@ -4539,6 +4560,7 @@ def wait_for_sso_cookie(timeout=120, log_callback=None, cancel_callback=None):
     last_seen_names = set()
     last_submit_retry = 0.0
     last_cf_retry_at = 0.0
+    last_url_log = 0.0
 
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
@@ -4548,8 +4570,17 @@ def wait_for_sso_cookie(timeout=120, log_callback=None, cancel_callback=None):
                 human_sleep(1, cancel_callback)
                 continue
 
-            # 仍停留在“完成注册”页时，若 Cloudflare 已通过，周期性重试点击提交
+            # 每 10 秒记录当前 URL 和页面状态
             now = time.time()
+            if log_callback and now - last_url_log >= 10:
+                try:
+                    cur_url = page.url or "unknown"
+                    log_callback(f"[Debug] SSO等待中 URL: {cur_url}")
+                except Exception:
+                    pass
+                last_url_log = now
+
+            # 仍停留在"完成注册"页时，若 Cloudflare 已通过，周期性重试点击提交
             if now - last_submit_retry >= 2.5:
                 retried = page.run_js(
                     r"""
@@ -4633,14 +4664,71 @@ return String(cfInput.value || '').trim().length;
                 if name:
                     last_seen_names.add(name)
 
-                if name == "sso" and value:
+                if name in ("sso", "sso-rw") and value:
                     if log_callback:
-                        log_callback("[*] 已获取到 sso cookie")
+                        log_callback(f"[*] 已获取到 {name} cookie")
                     return value
+
+            # 页面已跳转但 sso 尚未出现 —— 检测中间页（TOS/consent）并自动处理
+            if now - last_submit_retry >= 5:
+                try:
+                    mid_state = page.run_js(
+                        r"""
+const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+const url = location.href;
+
+// TOS / 隐私政策 / consent 页面
+const tosKeywords = ['Terms of Service', 'Privacy Policy', 'I agree', 'I accept',
+    'Accept', 'Agree', '继续', '同意', '服务条款', '隐私'];
+const isTos = tosKeywords.some(k => body.includes(k));
+
+// loading / verifying 页面
+const isLoading = body.includes('Verifying') || body.includes('Loading')
+    || body.includes('请稍候') || body.includes('验证中');
+
+// 账号已存在 / 错误页面
+const isError = body.includes('already exists') || body.includes('已存在')
+    || body.includes('Something went wrong') || body.includes('出错了');
+
+const title = document.title || '';
+return JSON.stringify({url, title, bodySnippet: body.slice(0, 300), isTos, isLoading, isError});
+                        """
+                    )
+                    if isinstance(mid_state, str):
+                        import json as _json
+                        try:
+                            info = _json.loads(mid_state)
+                        except Exception:
+                            info = {}
+                        if log_callback:
+                            log_callback(
+                                f"[Debug] 中间页检测 url={info.get('url','?')} "
+                                f"isTos={info.get('isTos')} isLoading={info.get('isLoading')} "
+                                f"isError={info.get('isError')} snippet={info.get('bodySnippet','')[:120]}"
+                            )
+                        if info.get("isTos"):
+                            clicked = page.run_js(
+                                r"""
+const btns = Array.from(document.querySelectorAll('button, a, input[type="submit"]'));
+const target = btns.find(n => {
+    const t = (n.innerText || n.value || '').replace(/\s+/g,'').toLowerCase();
+    return t.includes('agree') || t.includes('accept') || t.includes('continue')
+        || t.includes('同意') || t.includes('继续') || t.includes('接受');
+});
+if (target) { target.click(); return 'clicked'; }
+return 'no-btn';
+                            """
+                            )
+                            if log_callback:
+                                log_callback(f"[Debug] TOS 页面自动点击: {clicked}")
+                except Exception:
+                    pass
+                last_submit_retry = now
         except PageDisconnectedError:
             refresh_active_page()
-        except Exception:
-            pass
+        except Exception as e:
+            if log_callback:
+                log_callback(f"[Debug] SSO等待异常: {e}")
 
         human_sleep(1, cancel_callback)
 

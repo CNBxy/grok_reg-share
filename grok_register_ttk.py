@@ -4563,6 +4563,7 @@ def wait_for_sso_cookie(timeout=120, log_callback=None, cancel_callback=None):
     last_submit_retry = 0.0
     last_cf_retry_at = 0.0
     last_url_log = 0.0
+    last_mid_check = 0.0
 
     while time.time() < deadline:
         raise_if_cancelled(cancel_callback)
@@ -4672,7 +4673,7 @@ return String(cfInput.value || '').trim().length;
                     return value
 
             # 页面已跳转但 sso 尚未出现 —— 检测中间页（TOS/consent）并自动处理
-            if now - last_submit_retry >= 5:
+            if now - last_mid_check >= 5:
                 try:
                     mid_state = page.run_js(
                         r"""
@@ -4776,7 +4777,7 @@ return 'no-btn';
                                 log_callback(f"[Debug] 仍在注册页且有提交按钮，自动重试: {clicked}")
                 except Exception:
                     pass
-                last_submit_retry = now
+                last_mid_check = now
         except PageDisconnectedError:
             refresh_active_page()
         except Exception as e:

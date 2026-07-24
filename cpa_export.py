@@ -338,6 +338,108 @@ def push_cpa_to_grok2api_build(auth_file_path: str, cfg: dict, log: Callable[[st
     return False
 
 
+def call_grok2api_sso_to_build(
+    sso: str,
+    email: str = "",
+    name: str = "",
+    *,
+    config: dict | None = None,
+    log_callback: Callable[[str], None] | None = None,
+) -> dict:
+    """注册成功后调用 grok2api SSO→Build 转换接口完成 Device OAuth。
+
+    配置项：
+        grok2api_import_enabled          : 总开关
+        grok2api_device_oauth_enabled    : 是否启用 SSO→Build 转换
+        grok2api_import_base             : grok2api 根 URL
+        grok2api_import_management_key   : Management Key（Bearer 认证）
+        grok2api_import_retries          : 重试次数（默认3）
+        grok2api_import_retry_delay      : 重试间隔秒数（默认2）
+
+    调用方式：
+        POST {base}/api/admin/v1/accounts/device/sso-to-build
+        Authorization: Bearer <management_key>
+        Body: {"sso": "...", "email": "...", "name": "..."}
+    """
+    cfg = config or {}
+    log = log_callback or (lambda m: print(m, flush=True))
+
+    if not cfg.get("grok2api_import_enabled", False):
+        log("[sso2build] grok2api 导入未开启，跳过")
+        return {"ok": False, "skipped": True, "reason": "grok2api_import_disabled"}
+
+    if not cfg.get("grok2api_device_oauth_enabled", False):
+        log("[sso2build] SSO→Build 转换未开启，跳过")
+        return {"ok": False, "skipped": True, "reason": "device_oauth_disabled"}
+
+    base_url = str(cfg.get("grok2api_import_base", "") or "").strip().rstrip("/")
+    if not base_url:
+        log("[sso2build] grok2api_import_base 未配置，跳过")
+        return {"ok": False, "skipped": True, "reason": "no_base_url"}
+
+    mgmt_key = str(cfg.get("grok2api_import_management_key", "") or "").strip()
+
+    sso_val = (sso or "").strip()
+    if not sso_val:
+        log("[sso2build] SSO token 为空，跳过")
+        return {"ok": False, "error": "empty_sso"}
+
+    target_url = f"{base_url}/api/admin/v1/accounts/device/sso-to-build"
+    payload = {"sso": sso_val}
+    if email:
+        payload["email"] = email
+    if name:
+        payload["name"] = name
+
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if mgmt_key:
+        headers["Authorization"] = f"Bearer {mgmt_key}"
+
+    import urllib.request as urllib_req
+    import urllib.error as urllib_err
+
+    req = urllib_req.Request(target_url, data=data, headers=headers, method="POST")
+
+    retries = int(cfg.get("grok2api_import_retries", 3))
+    retry_delay = float(cfg.get("grok2api_import_retry_delay", 2))
+
+    for attempt in range(1, retries + 1):
+        try:
+            proxy = (cfg.get("cpa_proxy") or cfg.get("proxy") or "").strip()
+            if proxy:
+                proxy_handler = urllib_req.ProxyHandler({"http": proxy, "https": proxy})
+                opener = urllib_req.build_opener(proxy_handler)
+            else:
+                opener = urllib_req.build_opener()
+            resp = opener.open(req, timeout=120)
+            resp_body = resp.read().decode("utf-8", errors="replace")
+            status = resp.getcode()
+            if 200 <= status < 300:
+                result = json.loads(resp_body)
+                account_info = result.get("data", {}).get("account", {})
+                log(f"[sso2build] 转换成功: account_id={account_info.get('id')} email={account_info.get('email')}")
+                return {"ok": True, "data": result.get("data", {})}
+            else:
+                log(f"[sso2build] 失败 HTTP {status}: {resp_body[:300]}")
+                if attempt < retries:
+                    time.sleep(retry_delay)
+        except urllib_err.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")[:300]
+            except Exception:
+                pass
+            log(f"[sso2build] 失败 HTTP {e.code}: {err_body}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+        except Exception as e:
+            log(f"[sso2build] 异常(尝试 {attempt}/{retries}): {e}")
+            if attempt < retries:
+                time.sleep(retry_delay)
+    return {"ok": False, "error": "max_retries"}
+
+
 def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None] | None = None) -> bool:
     """将 CPA xai-*.json 推送到远程 CLIProxyAPI 仓管（原始逻辑）。
 

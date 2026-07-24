@@ -270,6 +270,26 @@ def _bg_mint_single(email: str, password: str, sso: str):
         _minting_emails.add(email)
 
     try:
+        reg_cfg = load_config()
+
+        # 如果开启了 grok2api Device OAuth，直接通过 grok2api 服务端完成转换
+        if reg_cfg.get("grok2api_device_oauth_enabled", False):
+            log_cb("grok2api Device OAuth 已开启，通过 grok2api 服务端完成 SSO→Build 转换...")
+            import cpa_export
+            r = cpa_export.call_grok2api_sso_to_build(
+                sso=sso,
+                email=email,
+                name=f"Grok Web {email}" if email else "",
+                config=reg_cfg,
+                log_callback=log_cb,
+            )
+            if r.get("ok"):
+                account_info = r.get("data", {}).get("account", {})
+                log_cb(f"SSO→Build 转换成功! account_id={account_info.get('id')}")
+            else:
+                log_cb(f"SSO→Build 转换失败: {r.get('error') or r}")
+            return
+
         log_cb("开始单号 CPA OIDC 补签流程...")
         import scripts.backfill_cpa_xai_from_accounts as bf
         import cpa_export

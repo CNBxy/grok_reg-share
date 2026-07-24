@@ -348,6 +348,7 @@ def _run_mint_job(worker_id: int | str, job: dict[str, Any], config: dict) -> di
     """Standalone CPA mint (own Chromium). Never reuses register browser."""
     email = job.get("email") or ""
     password = job.get("password") or ""
+    sso = job.get("sso") or ""
     if not email or not password:
         _inc("mint_fail")
         return {"ok": False, "error": "missing email/password", "email": email}
@@ -355,6 +356,32 @@ def _run_mint_job(worker_id: int | str, job: dict[str, Any], config: dict) -> di
         _inc("mint_skip")
         log(worker_id, f"[cpa] export disabled, skip {email}")
         return {"ok": False, "skipped": True, "email": email}
+
+    # 如果开启了 grok2api Device OAuth，直接通过 grok2api 服务端完成转换
+    if config.get("grok2api_device_oauth_enabled", False):
+        log(worker_id, f"[sso2build] 通过 grok2api 完成 Device OAuth...")
+        try:
+            import cpa_export
+            result = cpa_export.call_grok2api_sso_to_build(
+                sso=sso,
+                email=email,
+                name=f"Grok Web {email}" if email else "",
+                config=config,
+                log_callback=lambda m: log(worker_id, m),
+            )
+            if result.get("ok"):
+                log(worker_id, f"+ SSO→Build 转换成功: {result.get('data', {}).get('account', {}).get('id')}")
+                _inc("mint_success")
+                return result
+            else:
+                log(worker_id, f"! SSO→Build 转换失败: {result.get('error')}")
+                _inc("mint_fail")
+                return result
+        except Exception as exc:
+            log(worker_id, f"! SSO→Build 异常: {exc}")
+            _inc("mint_fail")
+            return {"ok": False, "error": str(exc), "email": email}
+
     try:
         import cpa_export
 

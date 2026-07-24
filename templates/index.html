@@ -95,7 +95,14 @@ tr:last-child td{border-bottom:none}
 .diag-item .val{font-family:var(--mono);word-break:break-all;text-align:right}
 
 /* Config Config category styles */
-.config-section-title{font-size:14px;font-weight:700;color:var(--accent-hover);margin-top:20px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:6px;grid-column: span 2}
+.config-section-title{font-size:14px;font-weight:700;color:var(--accent-hover);margin-top:20px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:6px;grid-column: span 2;cursor:pointer;display:flex;align-items:center;gap:8px;-webkit-user-select:none;user-select:none}
+.config-section-title:hover{color:var(--text)}
+.config-section-title .toggle-icon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;font-size:12px;font-weight:700;color:var(--muted);transition:transform .2s}
+.config-section-title .toggle-icon.expanded{transform:rotate(0deg)}
+.config-section-title .toggle-icon.collapsed::before{content:'+'}
+.config-section-title .toggle-icon.expanded::before{content:'\2212'}
+.config-section-body{grid-column:span 2;display:contents}
+.config-section-body.collapsed{display:none}
 .config-panel{display:flex;flex-direction:column;gap:16px}
 .config-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px}
 .config-field{display:flex;flex-direction:column;gap:6px}
@@ -637,7 +644,7 @@ const CONFIG_SECTIONS = {
     "cpa_base_url", "cpa_headless", "cpa_force_standalone", "cpa_mint_workers",
     "cpa_mint_cookie_inject", "cpa_mint_browser_reuse", "cpa_mint_browser_recycle_every",
     "cpa_mint_browser_retries", "cpa_mint_queue_max", "cpa_mint_required", "cpa_probe_after_write", "cpa_probe_chat",
-    "cpa_mint_timeout_sec"
+    "cpa_mint_timeout_sec", "cpa_screenshot_on_mint"
   ],
   "注册流程参数": [
     "register_count", "register_threads", "thread_start_interval", "register_max_attempts",
@@ -699,6 +706,7 @@ const CONFIG_LABELS = {
   "cpa_probe_after_write": "写出后探测 Grok 4.5",
   "cpa_probe_chat": "探测时发送测试对话",
   "cpa_mint_timeout_sec": "单号 CPA 超时（秒）",
+  "cpa_screenshot_on_mint": "CPA mint 全流程截图（排错用）",
   "cpa_remote_push_enabled": "成功后推送到远程 CPA 仓管",
   "cpa_remote_push_url": "远程仓管 API 地址",
   "cpa_remote_push_token": "远程推送认证 Token",
@@ -821,14 +829,25 @@ function renderConfig(cfg) {
     }
     if (renderKeys.length === 0) continue;
 
+    const isFirst = sectionName === Object.keys(CONFIG_SECTIONS)[0];
     const titleDiv = document.createElement('div');
     titleDiv.className = 'config-section-title';
-    titleDiv.textContent = sectionName;
+    titleDiv.innerHTML = `<span class="toggle-icon ${isFirst ? 'expanded' : 'collapsed'}"></span>${sectionName}`;
     grid.appendChild(titleDiv);
 
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = `config-section-body${isFirst ? '' : ' collapsed'}`;
+    grid.appendChild(bodyDiv);
+
     for (const k of renderKeys) {
-      createFieldMarkup(k, cfg[k], grid);
+      createFieldMarkup(k, cfg[k], bodyDiv);
     }
+
+    titleDiv.addEventListener('click', () => {
+      const icon = titleDiv.querySelector('.toggle-icon');
+      const isCollapsed = bodyDiv.classList.toggle('collapsed');
+      icon.className = `toggle-icon ${isCollapsed ? 'collapsed' : 'expanded'}`;
+    });
   }
 
   const categorizedKeys = Object.values(CONFIG_SECTIONS).flat();
@@ -836,11 +855,22 @@ function renderConfig(cfg) {
   if (restKeys.length > 0) {
     const titleDiv = document.createElement('div');
     titleDiv.className = 'config-section-title';
-    titleDiv.textContent = '其它自定义配置项';
+    titleDiv.innerHTML = '<span class="toggle-icon collapsed"></span>其它自定义配置项';
     grid.appendChild(titleDiv);
+
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'config-section-body collapsed';
+    grid.appendChild(bodyDiv);
+
     for (const k of restKeys) {
-      createFieldMarkup(k, cfg[k], grid);
+      createFieldMarkup(k, cfg[k], bodyDiv);
     }
+
+    titleDiv.addEventListener('click', () => {
+      const icon = titleDiv.querySelector('.toggle-icon');
+      const isCollapsed = bodyDiv.classList.toggle('collapsed');
+      icon.className = `toggle-icon ${isCollapsed ? 'collapsed' : 'expanded'}`;
+    });
   }
 
   const providerSelect = document.querySelector('select[data-key="email_provider"]');

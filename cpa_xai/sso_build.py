@@ -2,30 +2,33 @@
 
 Replicates grok2api's web-side sso_build.go flow using SSO cookies
 to automate the Device OAuth consent approval without a browser.
+Manual cookie/redirect handling mirrors the Go code exactly.
 """
 
 from __future__ import annotations
 
 import base64
-import http.cookiejar
+import http.client
 import json
+import re
+import ssl
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
-
-from .proxyutil import resolve_proxy
+from urllib.parse import urlparse
 
 CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
-SCOPE = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write"
+SCOPE = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write workspaces:read workspaces:write"
 ACCOUNTS_URL = "https://accounts.x.ai/"
 DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code"
 VERIFY_URL = "https://auth.x.ai/oauth2/device/verify"
 APPROVE_URL = "https://auth.x.ai/oauth2/device/approve"
 TOKEN_URL = "https://auth.x.ai/oauth2/token"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+USER_AGENT = "grok-shell/0.2.111 (linux; x86_64)"
+CLIENT_VERSION = "0.2.111"
+CLIENT_SURFACE = "ui"
+REFERRER = "grok-build"
 
 LogFn = Callable[[str], None]
 
@@ -34,11 +37,42 @@ def _noop_log(_: str) -> None:
     return None
 
 
-def _proxy_handler(proxy: str | None = None) -> urllib.request.ProxyHandler | None:
-    p = resolve_proxy(proxy)
-    if not p:
-        return None
-    return urllib.request.ProxyHandler({"http": p, "https": p})
+def _resolve_proxy(explicit: str | None = None) -> str:
+    from .proxyutil import resolve_proxy
+    return resolve_proxy(explicit)
+
+
+def _make_connection(
+    host: str,
+    port: int,
+    scheme: str,
+    proxy: str | None = None,
+    timeout: float = 60.0,
+) -> http.client.HTTPSConnection | http.client.HTTPConnection:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+
+    if not proxy:
+        if scheme == "https":
+            return http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+        return http.client.HTTPConnection(host, port, timeout=timeout)
+
+    p = urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    phost = p.hostname or ""
+    pport = p.port or (443 if p.scheme == "https" else 80)
+
+    if p.scheme in ("https",):
+        raise SSOBuildError("HTTPS proxy not supported")
+    if p.scheme in ("socks5", "socks5h", "socks4"):
+        raise SSOBuildError("SOCKS proxy not supported")
+
+    if scheme == "https":
+        conn = http.client.HTTPSConnection(phost, pport, timeout=timeout, context=ctx)
+        conn.set_tunnel(host, port)
+        return conn
+
+    return http.client.HTTPConnection(phost, pport, timeout=timeout)
 
 
 class SSOBuildError(RuntimeError):
@@ -61,20 +95,6 @@ def _claim_string(claims: dict[str, Any], key: str) -> str:
     return str(val).strip() if val is not None else ""
 
 
-def _response_url(resp: Any) -> str:
-    if hasattr(resp, "geturl"):
-        try:
-            return resp.geturl()
-        except Exception:
-            pass
-    if hasattr(resp, "url"):
-        try:
-            return resp.url
-        except Exception:
-            pass
-    return ""
-
-
 @dataclass
 class SSOConversionResult:
     access_token: str
@@ -87,70 +107,133 @@ class SSOConversionResult:
     user_code: str
 
 
-def _seed_sso_cookies(cookiejar: http.cookiejar.CookieJar, sso_token: str) -> None:
-    for domain in (".x.ai", "accounts.x.ai", "auth.x.ai"):
-        for name in ("sso", "sso-rw"):
-            c = http.cookiejar.Cookie(
-                version=0,
-                name=name,
-                value=sso_token,
-                port=None,
-                port_specified=False,
-                domain=domain,
-                domain_specified=True,
-                domain_initial_dot=domain.startswith("."),
-                path="/",
-                path_specified=True,
-                secure=True,
-                expires=None,
-                discard=False,
-                comment=None,
-                comment_url=None,
-                rest={},
-            )
-            cookiejar.set_cookie(c)
+def _normalize_sso_token(value: str) -> str:
+    value = (value or "").strip()
+    m = re.match(r"^sso=(.+)$", value, re.IGNORECASE)
+    if m:
+        value = m.group(1).strip()
+    value = value.split(";")[0].strip()
+    return value.replace("\r", "").replace("\n", "").replace("\x00", "")
+
+
+def _safe_xai_url(raw: str) -> bool:
+    if not raw:
+        return False
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme != "https" or parsed.username or not parsed.hostname:
+        return False
+    host = parsed.hostname.lower()
+    return host == "x.ai" or host.endswith(".x.ai")
+
+
+def _set_cookie_header(cookies: dict[str, str]) -> str:
+    return "; ".join(f"{k}={v}" for k, v in sorted(cookies.items()))
+
+
+def _capture_cookies(cookies: dict[str, str], set_cookie_header: str | None) -> None:
+    if not set_cookie_header:
+        return
+    for part in set_cookie_header.split(","):
+        part = part.strip()
+        m = re.match(r"^\s*([^=]+)=([^;]*)", part)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        value = m.group(2).strip()
+        if not name or len(name) > 128 or len(value) > 16384:
+            continue
+        if "; max-age=0" in part.lower() or "; max-age=-" in part:
+            cookies.pop(name, None)
+        else:
+            cookies[name] = value
 
 
 def _request(
-    opener: urllib.request.OpenerDirector,
+    cookies: dict[str, str],
     method: str,
     url: str,
     form: dict[str, str] | None = None,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
+    device_flow: bool = False,
+    proxy: str | None = None,
 ) -> tuple[int, str, bytes]:
-    data = urllib.parse.urlencode(form).encode() if form else None
-    headers = {
-        "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "User-Agent": USER_AGENT,
-    }
-    if form:
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    """Manual request with redirect following, matching Go code exactly."""
+    if not _safe_xai_url(url):
+        raise SSOBuildError(f"unsafe xAI URL: {url[:80]}")
 
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        resp = opener.open(req, timeout=timeout)
+    current_url = url
+    current_method = method
+    current_form = form
+
+    for _redirect in range(9):
+        parsed = urllib.parse.urlparse(current_url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
+
+        body_data = urllib.parse.urlencode(current_form).encode() if current_form else None
+
+        conn = _make_connection(host, port, parsed.scheme, proxy=proxy, timeout=timeout)
+
         try:
+            conn.connect()
+            conn.putrequest(current_method, path, skip_accept_encoding=False, skip_host=False)
+            conn.putheader("Accept", "application/json, text/html;q=0.9, */*;q=0.8")
+            conn.putheader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            conn.putheader("User-Agent", USER_AGENT)
+            conn.putheader("Host", host)
+            if device_flow:
+                conn.putheader("x-grok-client-version", CLIENT_VERSION)
+                conn.putheader("x-grok-client-surface", CLIENT_SURFACE)
+            cookie_val = _set_cookie_header(cookies)
+            if cookie_val:
+                conn.putheader("Cookie", cookie_val)
+            if current_form and body_data:
+                conn.putheader("Content-Type", "application/x-www-form-urlencoded")
+                conn.putheader("Content-Length", str(len(body_data)))
+            conn.endheaders(body_data)
+
+            resp = conn.getresponse()
+            status = resp.status
             body = resp.read()
-        except Exception:
-            body = b""
-        final_url = _response_url(resp)
-        return resp.status, final_url or url, body
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read()
-        except Exception:
-            body = b""
-        return e.code, url, body
-    except urllib.error.URLError as e:
-        raise SSOBuildError(f"request failed: {e.reason}") from e
-    except OSError as e:
-        raise SSOBuildError(f"connection error: {e}") from e
+            # capture Set-Cookie from this response (including redirects)
+            sc = resp.getheader("Set-Cookie")
+            if sc:
+                _capture_cookies(cookies, sc)
+
+            if status < 300 or status >= 400:
+                conn.close()
+                return status, current_url, body
+
+            location = resp.getheader("Location")
+            conn.close()
+
+            if not location:
+                return status, current_url, body
+
+            next_url = urllib.parse.urljoin(current_url, location.strip())
+            if not _safe_xai_url(next_url):
+                return status, next_url, body
+
+            current_url = next_url
+            if status == 303 or (status in (301, 302) and current_method not in ("GET", "HEAD")):
+                current_method = "GET"
+                current_form = None
+        except (OSError, http.client.HTTPException) as e:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise SSOBuildError(f"request failed: {e}") from e
+
+    raise SSOBuildError("too many redirects")
 
 
 def _poll_token(
+    cookies: dict[str, str],
     device_code: str,
-    opener: urllib.request.OpenerDirector,
     *,
     client_id: str = CLIENT_ID,
     interval: int = 5,
@@ -158,21 +241,24 @@ def _poll_token(
     timeout: float = 30.0,
     log: LogFn | None = None,
     cancel: Callable[[], bool] | None = None,
+    proxy: str | None = None,
 ) -> dict[str, Any]:
     log = log or _noop_log
     if interval < 1:
         interval = 1
-    deadline = time.time() + max(expires_in - 5, 30)
+    deadline = time.time() + max(expires_in - 5, 75)
 
     while time.time() < deadline:
         if cancel and cancel():
             raise SSOBuildError("cancelled during token poll")
 
         status, _, body = _request(
-            opener, "POST", TOKEN_URL,
+            cookies, "POST", TOKEN_URL,
             {"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
              "device_code": device_code, "client_id": client_id},
             timeout=timeout,
+            device_flow=True,
+            proxy=proxy,
         )
 
         try:
@@ -234,26 +320,19 @@ def convert_sso_to_build(
     Raises SSOBuildError on failure.
     """
     log = log or _noop_log
-    sso_val = (sso_token or "").strip()
+    sso_val = _normalize_sso_token(sso_token)
     if not sso_val:
         raise SSOBuildError("SSO token is empty")
 
-    cookiejar = http.cookiejar.CookieJar()
-    _seed_sso_cookies(cookiejar, sso_val)
+    resolved_proxy = _resolve_proxy(proxy) or None
 
-    handlers: list[urllib.request.BaseHandler] = [
-        urllib.request.HTTPCookieProcessor(cookiejar),
-    ]
-    ph = _proxy_handler(proxy)
-    if ph is not None:
-        handlers.append(ph)
-    opener = urllib.request.build_opener(*handlers)
+    cookies: dict[str, str] = {"sso": sso_val, "sso-rw": sso_val}
 
     # 1. Validate SSO
     log("validate SSO at accounts.x.ai")
     if cancel and cancel():
         raise SSOBuildError("cancelled during SSO validation")
-    status, final_url, _ = _request(opener, "GET", ACCOUNTS_URL)
+    status, final_url, _ = _request(cookies, "GET", ACCOUNTS_URL, proxy=resolved_proxy)
     if status == 401 or "sign-in" in final_url.lower() or "sign-up" in final_url.lower():
         raise SSOBuildError("SSO token invalid or expired")
     if status < 200 or status >= 400:
@@ -264,8 +343,9 @@ def convert_sso_to_build(
     if cancel and cancel():
         raise SSOBuildError("cancelled during device code request")
     status, _, body = _request(
-        opener, "POST", DEVICE_CODE_URL,
-        {"client_id": CLIENT_ID, "scope": SCOPE},
+        cookies, "POST", DEVICE_CODE_URL,
+        {"client_id": CLIENT_ID, "scope": SCOPE, "referrer": REFERRER},
+        device_flow=True, proxy=resolved_proxy,
     )
     if status < 200 or status >= 300:
         raise SSOBuildError(f"device code request failed: HTTP {status}")
@@ -285,7 +365,7 @@ def convert_sso_to_build(
     log(f"visit verification page for {user_code}")
     if cancel and cancel():
         raise SSOBuildError("cancelled during verification visit")
-    status, final_url, _ = _request(opener, "GET", verification_uri_complete)
+    status, final_url, _ = _request(cookies, "GET", verification_uri_complete, proxy=resolved_proxy)
     if status < 200 or status >= 400:
         raise SSOBuildError(f"verification page visit failed: HTTP {status}")
 
@@ -293,7 +373,7 @@ def convert_sso_to_build(
     log("auto-verify device code")
     if cancel and cancel():
         raise SSOBuildError("cancelled during verify")
-    status, final_url, _ = _request(opener, "POST", VERIFY_URL, {"user_code": user_code})
+    status, final_url, _ = _request(cookies, "POST", VERIFY_URL, {"user_code": user_code}, proxy=resolved_proxy)
     if status < 200 or status >= 400:
         raise SSOBuildError(f"device code verification failed: HTTP {status}")
     if "consent" not in final_url.lower():
@@ -304,8 +384,9 @@ def convert_sso_to_build(
     if cancel and cancel():
         raise SSOBuildError("cancelled during approve")
     status, final_url, _ = _request(
-        opener, "POST", APPROVE_URL,
+        cookies, "POST", APPROVE_URL,
         {"user_code": user_code, "action": "allow", "principal_type": "User", "principal_id": ""},
+        proxy=resolved_proxy,
     )
     if status < 200 or status >= 400:
         raise SSOBuildError(f"consent approval failed: HTTP {status}")
@@ -315,9 +396,9 @@ def convert_sso_to_build(
     # 6. Poll token
     log("poll for OAuth token")
     token = _poll_token(
-        device_code, opener,
+        cookies, device_code,
         interval=interval, expires_in=expires_in,
-        log=log, cancel=cancel,
+        log=log, cancel=cancel, proxy=resolved_proxy,
     )
 
     claims = _jwt_claims(token.get("id_token") or token.get("access_token") or "")

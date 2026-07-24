@@ -25,7 +25,7 @@ DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code"
 VERIFY_URL = "https://auth.x.ai/oauth2/device/verify"
 APPROVE_URL = "https://auth.x.ai/oauth2/device/approve"
 TOKEN_URL = "https://auth.x.ai/oauth2/token"
-USER_AGENT = "grok-shell/0.2.111 (linux; x86_64)"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 CLIENT_VERSION = "0.2.111"
 CLIENT_SURFACE = "ui"
 REFERRER = "grok-build"
@@ -209,7 +209,7 @@ def _request(
         conn = _make_connection(host, port, parsed.scheme, proxy=proxy, timeout=timeout)
 
         try:
-            conn.putrequest(current_method, path, skip_accept_encoding=False, skip_host=False)
+            conn.putrequest(current_method, path, skip_accept_encoding=False, skip_host=True)
             conn.putheader("Accept", "application/json, text/html;q=0.9, */*;q=0.8")
             conn.putheader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
             conn.putheader("User-Agent", USER_AGENT)

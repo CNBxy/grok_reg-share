@@ -1080,6 +1080,7 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
         retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
     )
     if web_ok and email:
+        grok2api_enable_nsfw(email, base, mgmt_key, log_callback)
         if config.get("grok2api_sso_to_build_enabled", True):
             _grok2api_sso_to_build(
                 sso=token,
@@ -1090,7 +1091,6 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
                 retries=int(config.get("grok2api_import_retries", 3)),
                 retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
             )
-        grok2api_enable_nsfw(email, base, mgmt_key, log_callback)
     return True
 
 

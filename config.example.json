@@ -112,8 +112,6 @@
   "grok2api_import_retries": 3,
   "// grok2api_import_retry_delay": "重试间隔（秒）",
   "grok2api_import_retry_delay": 2,
-  "// grok2api_device_oauth_enabled": "注册成功后通过 grok2api 的 SSO→Build 转换接口完成 Device OAuth（替代本地 CPA mint）。需 grok2api 已部署且支持 /api/admin/v1/accounts/device/sso-to-build",
-  "grok2api_device_oauth_enabled": false,
   "// grok2api_auto_add_local": "（保留）是否写入本机 grok2api token 文件",
   "grok2api_auto_add_local": false,
   "// grok2api_local_token_file": "（保留）本地 token 文件路径",

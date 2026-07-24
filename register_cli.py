@@ -269,13 +269,23 @@ def register_one(
         log(worker_id, f"+ 注册成功: {email}")
         reg.mark_used(email, password)
 
-        if reg.PERF_FLAGS.get("cookie_snapshot", True):
-            page = reg._get_page()
-            if page:
-                try:
-                    reg.save_cookies_snapshot(page, "success", email)
-                except Exception:
-                    pass
+        # Capture cookies BEFORE releasing browser (for mint cookie inject)
+        page = reg._get_page()
+        cookies = []
+        try:
+            import cpa_export as _cpa_exp
+
+            cookies = _cpa_exp.export_cookies_from_page(page) if page is not None else []
+        except Exception:
+            cookies = []
+        if cookies:
+            log(worker_id, f"[*] 导出 cookie {len(cookies)} 条供 mint 注入")
+
+        if page and reg.PERF_FLAGS.get("cookie_snapshot", True):
+            try:
+                reg.save_cookies_snapshot(page, "success", email)
+            except Exception:
+                pass
         try:
             reg.add_token_to_grok2api_pools(
                 sso, email=email, log_callback=lambda m: log(worker_id, m), sync=True
@@ -298,6 +308,7 @@ def register_one(
             "sso": sso,
             "profile": profile,
             "idx": idx,
+            "cookies": cookies,
         }
 
         if do_mint_inline:
@@ -334,23 +345,26 @@ def register_one(
 
 
 def _run_mint_job(worker_id: int | str, job: dict[str, Any], config: dict) -> dict:
-    """SSO->Build Device OAuth conversion via pure HTTP (no browser)."""
+    """Standalone CPA mint (own Chromium). Never reuses register browser."""
     email = job.get("email") or ""
-    sso = job.get("sso") or ""
-    if not email or not sso:
+    password = job.get("password") or ""
+    if not email or not password:
         _inc("mint_fail")
-        return {"ok": False, "error": "missing email/sso", "email": email}
+        return {"ok": False, "error": "missing email/password", "email": email}
     if not config.get("cpa_export_enabled", True):
         _inc("mint_skip")
         log(worker_id, f"[cpa] export disabled, skip {email}")
         return {"ok": False, "skipped": True, "email": email}
-
     try:
         import cpa_export
 
+        # page=None always — force standalone path inside export
         result = cpa_export.export_cpa_xai_for_account(
             email,
-            sso=sso or "",
+            password,
+            page=None,
+            cookies=job.get("cookies"),
+            sso=job.get("sso") or "",
             config=config,
             log_callback=lambda m: log(worker_id, m),
         )
@@ -454,6 +468,12 @@ def _mint_worker(worker_id: str, mint_queue: queue.Queue, config: dict):
             _run_mint_job(worker_id, job, config)
         finally:
             mint_queue.task_done()
+    try:
+        from cpa_xai.browser_confirm import shutdown_mint_browsers
+
+        shutdown_mint_browsers()
+    except Exception:
+        pass
     log(worker_id, "mint worker exit")
 
 

@@ -67,7 +67,7 @@ def export_cookies_from_page(page: Any) -> list[dict]:
 
 def export_cpa_xai_for_account(
     email: str,
-    password: str = "",
+    password: str,
     *,
     page: Any | None = None,
     cookies: Any | None = None,
@@ -75,7 +75,7 @@ def export_cpa_xai_for_account(
     config: dict | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> dict:
-    """Mint OIDC + write xai-<email>.json using pure-HTTP SSO->Build flow (no browser)."""
+    """Mint OIDC + write xai-<email>.json under register cpa_auths (and optional CPA auth-dir)."""
     cfg = config or {}
     log = log_callback or (lambda m: print(m, flush=True))
 
@@ -101,7 +101,7 @@ def export_cpa_xai_for_account(
     if cpa_dir and not cpa_dir.is_absolute():
         cpa_dir = (_REG_DIR / cpa_dir).resolve()
 
-    # Priority: cpa_proxy > proxy > env.
+    # Priority: cpa_proxy > proxy > env. Config must beat shell https_proxy.
     proxy = (cfg.get("cpa_proxy") or cfg.get("proxy") or "").strip()
     if not proxy:
         proxy = (
@@ -110,29 +110,74 @@ def export_cpa_xai_for_account(
             or os.environ.get("http_proxy")
             or ""
         ).strip()
+    # Default headed: headless is frequently Cloudflare-blocked on accounts.x.ai
+    headless = bool(cfg.get("cpa_headless", False))
     probe = bool(cfg.get("cpa_probe_after_write", True))
     probe_chat = bool(cfg.get("cpa_probe_chat", False))
+    timeout = float(cfg.get("cpa_mint_timeout_sec", 240))
     base_url = cfg.get("cpa_base_url") or "https://cli-chat-proxy.grok.com/v1"
+    force_standalone = bool(cfg.get("cpa_force_standalone", True))
+    cookie_inject = bool(cfg.get("cpa_mint_cookie_inject", True))
+    reuse_browser = bool(cfg.get("cpa_mint_browser_reuse", True))
+    recycle_every = int(cfg.get("cpa_mint_browser_recycle_every", 15) or 0)
+    browser_retries = int(cfg.get("cpa_mint_browser_retries", 2) or 0)
+    screenshot = bool(cfg.get("cpa_screenshot_on_mint", False))
 
-    sso_val = (sso or "").strip()
-    if not sso_val:
-        log("[cpa] no SSO token provided, cannot mint")
-        return {"ok": False, "error": "missing SSO token"}
+    # cookies: explicit arg > page export > none
+    use_cookies = cookies
+    if use_cookies is None and cookie_inject and page is not None:
+        use_cookies = export_cookies_from_page(page)
+    if not cookie_inject:
+        use_cookies = None
+    else:
+        # Always attach SSO cookie clones — register cookies alone often miss accounts.x.ai host
+        sso_val = (sso or "").strip()
+        if not sso_val and isinstance(use_cookies, list):
+            for c in use_cookies:
+                if isinstance(c, dict) and c.get("name") in ("sso", "sso-rw") and c.get("value"):
+                    sso_val = str(c.get("value"))
+                    break
+        if sso_val:
+            base = list(use_cookies) if isinstance(use_cookies, list) else []
+            for name in ("sso", "sso-rw"):
+                for dom in (".x.ai", "accounts.x.ai", ".accounts.x.ai", "auth.x.ai", "grok.com", ".grok.com"):
+                    base.append({
+                        "name": name,
+                        "value": sso_val,
+                        "domain": dom,
+                        "path": "/",
+                        "secure": True,
+                        "httpOnly": True,
+                    })
+            use_cookies = base
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    log(f"[cpa] SSO->Build OIDC for {email} -> {out_dir} proxy={proxy or '(none)'}")
+    log(
+        f"[cpa] mint OIDC for {email} -> {out_dir} proxy={proxy or '(none)'} "
+        f"cookies={len(use_cookies) if isinstance(use_cookies, list) else (1 if use_cookies else 0)} "
+        f"reuse={reuse_browser}"
+    )
 
     def _log(msg: str) -> None:
         log(f"[cpa] {msg}")
 
     result = mint_and_export(
         email=email,
-        sso_token=sso_val,
+        password=password,
         auth_dir=out_dir,
+        page=None if force_standalone else page,
         proxy=proxy or None,
+        headless=headless,
         base_url=base_url,
         probe=probe,
         probe_chat=probe_chat,
+        browser_timeout_sec=timeout,
+        force_standalone=force_standalone,
+        cookies=use_cookies,
+        reuse_browser=reuse_browser,
+        recycle_every=recycle_every,
+        browser_retries=browser_retries,
+        screenshot=screenshot,
         log=_log,
     )
 
@@ -291,108 +336,6 @@ def push_cpa_to_grok2api_build(auth_file_path: str, cfg: dict, log: Callable[[st
             if attempt < retries:
                 time.sleep(retry_delay)
     return False
-
-
-def call_grok2api_sso_to_build(
-    sso: str,
-    email: str = "",
-    name: str = "",
-    *,
-    config: dict | None = None,
-    log_callback: Callable[[str], None] | None = None,
-) -> dict:
-    """注册成功后调用 grok2api SSO→Build 转换接口完成 Device OAuth。
-
-    配置项：
-        grok2api_import_enabled          : 总开关
-        grok2api_device_oauth_enabled    : 是否启用 SSO→Build 转换
-        grok2api_import_base             : grok2api 根 URL
-        grok2api_import_management_key   : Management Key（Bearer 认证）
-        grok2api_import_retries          : 重试次数（默认3）
-        grok2api_import_retry_delay      : 重试间隔秒数（默认2）
-
-    调用方式：
-        POST {base}/api/admin/v1/accounts/device/sso-to-build
-        Authorization: Bearer <management_key>
-        Body: {"sso": "...", "email": "...", "name": "..."}
-    """
-    cfg = config or {}
-    log = log_callback or (lambda m: print(m, flush=True))
-
-    if not cfg.get("grok2api_import_enabled", False):
-        log("[sso2build] grok2api 导入未开启，跳过")
-        return {"ok": False, "skipped": True, "reason": "grok2api_import_disabled"}
-
-    if not cfg.get("grok2api_device_oauth_enabled", False):
-        log("[sso2build] SSO→Build 转换未开启，跳过")
-        return {"ok": False, "skipped": True, "reason": "device_oauth_disabled"}
-
-    base_url = str(cfg.get("grok2api_import_base", "") or "").strip().rstrip("/")
-    if not base_url:
-        log("[sso2build] grok2api_import_base 未配置，跳过")
-        return {"ok": False, "skipped": True, "reason": "no_base_url"}
-
-    mgmt_key = str(cfg.get("grok2api_import_management_key", "") or "").strip()
-
-    sso_val = (sso or "").strip()
-    if not sso_val:
-        log("[sso2build] SSO token 为空，跳过")
-        return {"ok": False, "error": "empty_sso"}
-
-    target_url = f"{base_url}/api/admin/v1/accounts/device/sso-to-build"
-    payload = {"sso": sso_val}
-    if email:
-        payload["email"] = email
-    if name:
-        payload["name"] = name
-
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = {"Content-Type": "application/json; charset=utf-8"}
-    if mgmt_key:
-        headers["Authorization"] = f"Bearer {mgmt_key}"
-
-    import urllib.request as urllib_req
-    import urllib.error as urllib_err
-
-    req = urllib_req.Request(target_url, data=data, headers=headers, method="POST")
-
-    retries = int(cfg.get("grok2api_import_retries", 3))
-    retry_delay = float(cfg.get("grok2api_import_retry_delay", 2))
-
-    for attempt in range(1, retries + 1):
-        try:
-            proxy = (cfg.get("cpa_proxy") or cfg.get("proxy") or "").strip()
-            if proxy:
-                proxy_handler = urllib_req.ProxyHandler({"http": proxy, "https": proxy})
-                opener = urllib_req.build_opener(proxy_handler)
-            else:
-                opener = urllib_req.build_opener()
-            resp = opener.open(req, timeout=120)
-            resp_body = resp.read().decode("utf-8", errors="replace")
-            status = resp.getcode()
-            if 200 <= status < 300:
-                result = json.loads(resp_body)
-                account_info = result.get("data", {}).get("account", {})
-                log(f"[sso2build] 转换成功: account_id={account_info.get('id')} email={account_info.get('email')}")
-                return {"ok": True, "data": result.get("data", {})}
-            else:
-                log(f"[sso2build] 失败 HTTP {status}: {resp_body[:300]}")
-                if attempt < retries:
-                    time.sleep(retry_delay)
-        except urllib_err.HTTPError as e:
-            err_body = ""
-            try:
-                err_body = e.read().decode("utf-8", errors="replace")[:300]
-            except Exception:
-                pass
-            log(f"[sso2build] 失败 HTTP {e.code}: {err_body}")
-            if attempt < retries:
-                time.sleep(retry_delay)
-        except Exception as e:
-            log(f"[sso2build] 异常(尝试 {attempt}/{retries}): {e}")
-            if attempt < retries:
-                time.sleep(retry_delay)
-    return {"ok": False, "error": "max_retries"}
 
 
 def push_cpa_to_remote(auth_file_path: str, cfg: dict, log: Callable[[str], None] | None = None) -> bool:

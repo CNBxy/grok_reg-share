@@ -6,7 +6,6 @@ Produce CLIProxyAPI-compatible ``xai-<email>.json`` credentials.
 from .accounts import AccountLine, existing_cpa_emails, parse_accounts_file
 from .mint import mint_and_export
 from .probe import probe_mini_response, probe_models
-from .sso_build import SSOBuildError, SSOConversionResult, convert_sso_to_build
 from .schema import (
     CLIENT_ID,
     DEFAULT_BASE_URL,
@@ -33,10 +32,7 @@ __all__ = [
     "DEFAULT_REDIRECT_URI",
     "DEFAULT_TOKEN_ENDPOINT",
     "OAUTH_CLIENT_ID",
-    "SSOBuildError",
-    "SSOConversionResult",
     "build_cpa_xai_auth",
-    "convert_sso_to_build",
     "credential_file_name",
     "existing_cpa_emails",
     "expired_from_access_token",

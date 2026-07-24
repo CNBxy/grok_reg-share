@@ -270,15 +270,21 @@ def _bg_mint_single(email: str, password: str, sso: str):
         _minting_emails.add(email)
 
     try:
-        reg_cfg = load_config()
-
-        log_cb("开始 SSO→Build Device OAuth 转换...")
+        log_cb("开始单号 CPA OIDC 补签流程...")
+        import scripts.backfill_cpa_xai_from_accounts as bf
         import cpa_export
         
+        reg_cfg = load_config()
+        proxy = reg_cfg.get("cpa_proxy") or reg_cfg.get("proxy") or None
         cpa_dir = reg_cfg.get("cpa_hotload_dir") or ""
+        
+        log_cb(f"正在拉起 Chromium 访问 accounts.x.ai 进行授权确认 (使用代理: {proxy or '直连'})...")
         
         r = cpa_export.export_cpa_xai_for_account(
             email=email,
+            password=password,
+            page=None,
+            cookies=None,
             sso=sso,
             config=reg_cfg,
             log_callback=log_cb

@@ -272,39 +272,13 @@ def _bg_mint_single(email: str, password: str, sso: str):
     try:
         reg_cfg = load_config()
 
-        # 如果开启了 grok2api Device OAuth，直接通过 grok2api 服务端完成转换
-        if reg_cfg.get("grok2api_device_oauth_enabled", False):
-            log_cb("grok2api Device OAuth 已开启，通过 grok2api 服务端完成 SSO→Build 转换...")
-            import cpa_export
-            r = cpa_export.call_grok2api_sso_to_build(
-                sso=sso,
-                email=email,
-                name=f"Grok Web {email}" if email else "",
-                config=reg_cfg,
-                log_callback=log_cb,
-            )
-            if r.get("ok"):
-                account_info = r.get("data", {}).get("account", {})
-                log_cb(f"SSO→Build 转换成功! account_id={account_info.get('id')}")
-            else:
-                log_cb(f"SSO→Build 转换失败: {r.get('error') or r}")
-            return
-
-        log_cb("开始单号 CPA OIDC 补签流程...")
-        import scripts.backfill_cpa_xai_from_accounts as bf
+        log_cb("开始 SSO→Build Device OAuth 转换...")
         import cpa_export
         
-        reg_cfg = load_config()
-        proxy = reg_cfg.get("cpa_proxy") or reg_cfg.get("proxy") or None
         cpa_dir = reg_cfg.get("cpa_hotload_dir") or ""
-        
-        log_cb(f"正在拉起 Chromium 访问 accounts.x.ai 进行授权确认 (使用代理: {proxy or '直连'})...")
         
         r = cpa_export.export_cpa_xai_for_account(
             email=email,
-            password=password,
-            page=None,
-            cookies=None,
             sso=sso,
             config=reg_cfg,
             log_callback=log_cb

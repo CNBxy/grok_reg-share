@@ -269,23 +269,13 @@ def register_one(
         log(worker_id, f"+ 注册成功: {email}")
         reg.mark_used(email, password)
 
-        # Capture cookies BEFORE releasing browser (for mint cookie inject)
-        page = reg._get_page()
-        cookies = []
-        try:
-            import cpa_export as _cpa_exp
-
-            cookies = _cpa_exp.export_cookies_from_page(page) if page is not None else []
-        except Exception:
-            cookies = []
-        if cookies:
-            log(worker_id, f"[*] 导出 cookie {len(cookies)} 条供 mint 注入")
-
-        if page and reg.PERF_FLAGS.get("cookie_snapshot", True):
-            try:
-                reg.save_cookies_snapshot(page, "success", email)
-            except Exception:
-                pass
+        if reg.PERF_FLAGS.get("cookie_snapshot", True):
+            page = reg._get_page()
+            if page:
+                try:
+                    reg.save_cookies_snapshot(page, "success", email)
+                except Exception:
+                    pass
         try:
             reg.add_token_to_grok2api_pools(
                 sso, email=email, log_callback=lambda m: log(worker_id, m), sync=True
@@ -308,7 +298,6 @@ def register_one(
             "sso": sso,
             "profile": profile,
             "idx": idx,
-            "cookies": cookies,
         }
 
         if do_mint_inline:
@@ -345,53 +334,23 @@ def register_one(
 
 
 def _run_mint_job(worker_id: int | str, job: dict[str, Any], config: dict) -> dict:
-    """Standalone CPA mint (own Chromium). Never reuses register browser."""
+    """SSO->Build Device OAuth conversion via pure HTTP (no browser)."""
     email = job.get("email") or ""
-    password = job.get("password") or ""
     sso = job.get("sso") or ""
-    if not email or not password:
+    if not email or not sso:
         _inc("mint_fail")
-        return {"ok": False, "error": "missing email/password", "email": email}
+        return {"ok": False, "error": "missing email/sso", "email": email}
     if not config.get("cpa_export_enabled", True):
         _inc("mint_skip")
         log(worker_id, f"[cpa] export disabled, skip {email}")
         return {"ok": False, "skipped": True, "email": email}
 
-    # 如果开启了 grok2api Device OAuth，直接通过 grok2api 服务端完成转换
-    if config.get("grok2api_device_oauth_enabled", False):
-        log(worker_id, f"[sso2build] 通过 grok2api 完成 Device OAuth...")
-        try:
-            import cpa_export
-            result = cpa_export.call_grok2api_sso_to_build(
-                sso=sso,
-                email=email,
-                name=f"Grok Web {email}" if email else "",
-                config=config,
-                log_callback=lambda m: log(worker_id, m),
-            )
-            if result.get("ok"):
-                log(worker_id, f"+ SSO→Build 转换成功: {result.get('data', {}).get('account', {}).get('id')}")
-                _inc("mint_success")
-                return result
-            else:
-                log(worker_id, f"! SSO→Build 转换失败: {result.get('error')}")
-                _inc("mint_fail")
-                return result
-        except Exception as exc:
-            log(worker_id, f"! SSO→Build 异常: {exc}")
-            _inc("mint_fail")
-            return {"ok": False, "error": str(exc), "email": email}
-
     try:
         import cpa_export
 
-        # page=None always — force standalone path inside export
         result = cpa_export.export_cpa_xai_for_account(
             email,
-            password,
-            page=None,
-            cookies=job.get("cookies"),
-            sso=job.get("sso") or "",
+            sso=sso or "",
             config=config,
             log_callback=lambda m: log(worker_id, m),
         )
@@ -495,12 +454,6 @@ def _mint_worker(worker_id: str, mint_queue: queue.Queue, config: dict):
             _run_mint_job(worker_id, job, config)
         finally:
             mint_queue.task_done()
-    try:
-        from cpa_xai.browser_confirm import shutdown_mint_browsers
-
-        shutdown_mint_browsers()
-    except Exception:
-        pass
     log(worker_id, "mint worker exit")
 
 

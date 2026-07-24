@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "grok2api_import_management_key": "",
     "grok2api_import_retries": 3,
     "grok2api_import_retry_delay": 2,
+    "grok2api_sso_to_build_enabled": True,
     "grok2api_auto_add_local": False,
     "grok2api_local_token_file": "",
     "register_threads": 1,
@@ -1015,6 +1016,39 @@ def grok2api_enable_nsfw(email, base_url, mgmt_key, log_callback=None):
     _grok2api_enable_nsfw(account_id, base_url, mgmt_key, log_callback, retries, retry_delay)
 
 
+def _grok2api_sso_to_build(sso, email, base_url, mgmt_key, log_callback=None, retries=3, retry_delay=2):
+    """Call grok2api SSO→Build conversion endpoint (server-side Device OAuth, no local TLS fingerprint issues)."""
+    import json as _json
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if mgmt_key:
+        headers["Authorization"] = f"Bearer {mgmt_key}"
+    url = f"{base_url}/api/admin/v1/accounts/device/sso-to-build"
+    payload = _json.dumps({"sso": sso, "email": email, "name": email or ""})
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = http_post(url, headers=headers, data=payload, timeout=120, proxies={})
+            if resp.status_code == 401:
+                if log_callback:
+                    log_callback("[grok2api] SSO→Build 认证失败，检查 management_key 配置")
+                return False
+            if resp.status_code == 409:
+                if log_callback:
+                    log_callback(f"[grok2api] SSO→Build Build 已存在 (HTTP 409): {email}")
+                return True
+            resp.raise_for_status()
+            if log_callback:
+                log_callback(f"[+] grok2api SSO→Build 成功: {email}")
+            return True
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(retry_delay)
+    if log_callback:
+        log_callback(f"[!] grok2api SSO→Build 失败({retries}次): {last_exc}")
+    return False
+
+
 def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
     """Push SSO to grok2api Grok Web & Grok Console via import API (从画面中导入账号 流程)."""
     token = _normalize_sso_token(raw_token)
@@ -1046,6 +1080,16 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
         retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
     )
     if web_ok and email:
+        if config.get("grok2api_sso_to_build_enabled", True):
+            _grok2api_sso_to_build(
+                sso=token,
+                email=email,
+                base_url=base,
+                mgmt_key=mgmt_key,
+                log_callback=log_callback,
+                retries=int(config.get("grok2api_import_retries", 3)),
+                retry_delay=float(config.get("grok2api_import_retry_delay", 2)),
+            )
         grok2api_enable_nsfw(email, base, mgmt_key, log_callback)
     return True
 

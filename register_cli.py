@@ -355,6 +355,10 @@ def _run_mint_job(worker_id: int | str, job: dict[str, Any], config: dict) -> di
         _inc("mint_skip")
         log(worker_id, f"[cpa] export disabled, skip {email}")
         return {"ok": False, "skipped": True, "email": email}
+    if config.get("grok2api_sso_to_build_enabled", True) and config.get("grok2api_import_enabled", True):
+        _inc("mint_skip")
+        log(worker_id, f"[cpa] grok2api SSO→Build enabled, skip local CPA mint for {email}")
+        return {"ok": True, "skipped": True, "reason": "grok2api_sso_to_build", "email": email}
     try:
         import cpa_export
 

@@ -101,7 +101,7 @@
   "email_submit_confirm_timeout": 30,
 
   "// ===== grok2api 账号导入（从画面中导入账号 流程） =====": "",
-  "// grok2api 配置说明": "注册成功的 SSO 自动推送至 Grok Web 和 Grok Console，CPA OIDC 推送至 Grok Build。与 grok2api Web UI「从画面中导入账号」行为完全一致。",
+  "// grok2api 配置说明": "注册成功的 SSO 自动推送至 Grok Web 和 Grok Console，并通过 SSO→Build 服务端 Device OAuth 转换生成 Build 凭证（替代本地 CPA mint）。与 grok2api Web UI「从画面中导入账号」行为完全一致。",
   "// grok2api_import_enabled": "是否开启 grok2api 远程导入（SSO → Web/Console，CPA → Build）",
   "grok2api_import_enabled": true,
   "// grok2api_import_base": "grok2api 根地址，如 http://127.0.0.1:8000。自动拼接 /api/admin/v1/accounts/*/import/body",
@@ -112,6 +112,8 @@
   "grok2api_import_retries": 3,
   "// grok2api_import_retry_delay": "重试间隔（秒）",
   "grok2api_import_retry_delay": 2,
+  "// grok2api_sso_to_build_enabled": "注册后自动调用 grok2api SSO→Build 转换（服务端 Device OAuth），替代本地 CPA mint。需 grok2api 8a8db129+",
+  "grok2api_sso_to_build_enabled": true,
   "// grok2api_auto_add_local": "（保留）是否写入本机 grok2api token 文件",
   "grok2api_auto_add_local": false,
   "// grok2api_local_token_file": "（保留）本地 token 文件路径",

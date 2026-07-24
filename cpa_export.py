@@ -121,6 +121,7 @@ def export_cpa_xai_for_account(
     reuse_browser = bool(cfg.get("cpa_mint_browser_reuse", True))
     recycle_every = int(cfg.get("cpa_mint_browser_recycle_every", 15) or 0)
     browser_retries = int(cfg.get("cpa_mint_browser_retries", 2) or 0)
+    screenshot = bool(cfg.get("cpa_screenshot_on_mint", False))
 
     # cookies: explicit arg > page export > none
     use_cookies = cookies
@@ -176,6 +177,7 @@ def export_cpa_xai_for_account(
         reuse_browser=reuse_browser,
         recycle_every=recycle_every,
         browser_retries=browser_retries,
+        screenshot=screenshot,
         log=_log,
     )
 

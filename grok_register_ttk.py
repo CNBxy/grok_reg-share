@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     "openai_cpa_webhook_secret": "",
     "openai_cpa_cloudmail_fallback": True,
     "cpa_mint_browser_retries": 2,
+    "cpa_screenshot_on_mint": False,
     "nav_email_button_timeout": 12,
     "email_form_timeout": 20,
     "screenshot_on_error": False,

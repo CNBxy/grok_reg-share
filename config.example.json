@@ -145,6 +145,8 @@
   "cpa_probe_after_write": true,
   "// cpa_probe_chat": "写出后再打一发最小 /v1/responses（更慢，默认关）",
   "cpa_probe_chat": false,
+  "// cpa_screenshot_on_mint": "CPA mint 全流程截图。开启后每步关键操作前截图到 screenshots/ 目录，便于排查 OIDC 认证失败问题",
+  "cpa_screenshot_on_mint": false,
 
   "// ===== 并发 / mint 流水线（register_cli） =====": "",
   "// cpa_mint_workers": "CPA OIDC mint 并发数。-1=自动；0=注册线程内联 mint；1-10=固定并发。CLI --mint-workers 可覆盖。",

@@ -70,6 +70,7 @@ def mint_and_export(
     reuse_browser: bool = True,
     recycle_every: int = 15,
     browser_retries: int = 2,
+    screenshot: bool = False,
     log: LogFn | None = None,
     cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -103,6 +104,7 @@ def mint_and_export(
                 cookies=cookies,
                 reuse_browser=reuse_browser,
                 recycle_every=recycle_every,
+                screenshot=screenshot,
                 poll_log=log,
                 cancel=cancel,
             )

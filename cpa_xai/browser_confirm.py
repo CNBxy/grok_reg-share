@@ -69,18 +69,23 @@ def _safe_tag(s: str) -> str:
     return "".join(out)[:80] or "na"
 
 
-def _cpa_flow_shot(
+def _screenshot_loop(
     page: Any,
+    stop_event: threading.Event,
     *,
-    tag: str,
     email: str = "",
-    enabled: bool = False,
     log: LogFn | None = None,
 ) -> None:
-    """CPA full-flow progress screenshot (only when enabled)."""
-    if not enabled:
-        return
-    _save_debug_shot(page, tag=f"cpa-{tag}", email=email, log=log)
+    """Background thread: takes CPA flow screenshot every 0.1s until stop_event."""
+    log = log or _noop_log
+    import itertools
+    counter = itertools.count()
+    while not stop_event.is_set():
+        seq = next(counter)
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        tag = f"cpa-flow-{ts}-{seq:06d}"
+        _save_debug_shot(page, tag=tag, email=email, log=log)
+        stop_event.wait(0.1)
 
 
 def _save_debug_shot(
@@ -917,7 +922,6 @@ def approve_device_code(
     user_code: str = "",
     timeout_sec: float = 240.0,
     stop_event: threading.Event | None = None,
-    screenshot: bool = False,
     log: LogFn | None = None,
 ) -> None:
     log = log or _noop_log
@@ -940,7 +944,6 @@ def approve_device_code(
     except TypeError:
         page.get(verification_uri_complete)
     _sleep(2.0)
-    _cpa_flow_shot(page, tag="device-url-opened", email=email, enabled=screenshot, log=log)
 
     deadline = time.time() + timeout_sec
     phase = "device"
@@ -1000,7 +1003,6 @@ def approve_device_code(
 
         # Consent page — REAL click exact 允许 (never 全部允许)
         if "/consent" in url or "授权 Grok Build" in text or "Authorize Grok Build" in text:
-            _cpa_flow_shot(page, tag="consent-page", email=email, enabled=screenshot, log=log)
             phase = "consent"
             # double-check banner cleared this frame
             if _cookie_banner_visible(_visible_text(page)):
@@ -1044,7 +1046,6 @@ def approve_device_code(
         # Device code entry
         if page.ele("css:input[name='user_code']", timeout=0.3) and "consent" not in url:
             phase = "device"
-            _cpa_flow_shot(page, tag="device-code-page", email=email, enabled=screenshot, log=log)
             if user_code:
                 try:
                     uc = page.ele("css:input[name='user_code']")
@@ -1057,7 +1058,6 @@ def approve_device_code(
                     pass
             if _click_exact(page, ["继续", "Continue"], log, real=False):
                 _sleep(2.0)
-                _cpa_flow_shot(page, tag="continue-clicked", email=email, enabled=screenshot, log=log)
                 continue
             try:
                 el = page.ele("css:button[type='submit']", timeout=0.5)
@@ -1082,7 +1082,6 @@ def approve_device_code(
 
         # Sign-in chooser
         if "使用邮箱登录" in text or "Continue with email" in text:
-            _cpa_flow_shot(page, tag="signin-chooser", email=email, enabled=screenshot, log=log)
             if _click_exact(page, ["使用邮箱登录", "Continue with email", "Sign in with email"], log, real=False):
                 _sleep(1.5)
                 phase = "email"
@@ -1093,17 +1092,14 @@ def approve_device_code(
             "css:input[type='password']", timeout=0.2
         ):
             phase = "email"
-            _cpa_flow_shot(page, tag="email-form", email=email, enabled=screenshot, log=log)
             _fill(page, "css:input[type='email']", email, log, "email")
             if _click_exact(page, ["下一步", "Next", "Continue", "继续"], log, real=False):
                 _sleep(1.8)
-                _cpa_flow_shot(page, tag="email-submitted", email=email, enabled=screenshot, log=log)
                 continue
 
         # Password login
         if page.ele("css:input[type='password']", timeout=0.3):
             phase = "password"
-            _cpa_flow_shot(page, tag="password-form", email=email, enabled=screenshot, log=log)
             if login_attempts >= 3:
                 # Already tried enough — check page text once more then skip
                 auth_err = _detect_auth_error(text, url) or "login failed after retries (still on password page)"
@@ -1253,13 +1249,11 @@ def mint_with_browser(
             if owned:
                 # non-reuse path: track for finally close
                 pass
-            _cpa_flow_shot(work_page, tag="browser-acquired", email=email, enabled=screenshot, log=log)
 
         # Cookie inject before opening device URL (skip secondary login when possible)
         if cookies:
             n = inject_cookies(work_page, cookies, log=log)
             log(f"cookie inject count={n}")
-            _cpa_flow_shot(work_page, tag="cookie-injected", email=email, enabled=screenshot, log=log)
             try:
                 work_page.get("https://accounts.x.ai/")
                 _sleep(1.0)
@@ -1273,6 +1267,18 @@ def mint_with_browser(
         stop_event = threading.Event()
         token_box: dict[str, Any] = {}
         err_box: dict[str, BaseException] = {}
+
+        sshot_thread: threading.Thread | None = None
+        if screenshot and work_page is not None:
+            sshot_thread = threading.Thread(
+                target=_screenshot_loop,
+                args=(work_page, stop_event),
+                kwargs={"email": email, "log": log},
+                daemon=True,
+                name="cpa-sshot",
+            )
+            sshot_thread.start()
+            log("CPA interval screenshot started (0.1s)")
 
         def _poll() -> None:
             try:
@@ -1308,7 +1314,6 @@ def mint_with_browser(
                     user_code=sess.user_code,
                     timeout_sec=browser_timeout_sec,
                     stop_event=stop_event,
-                    screenshot=screenshot,
                     log=log,
                 )
             except BrowserConfirmError as e:

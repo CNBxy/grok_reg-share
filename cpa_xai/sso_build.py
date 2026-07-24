@@ -48,31 +48,62 @@ def _make_connection(
     scheme: str,
     proxy: str | None = None,
     timeout: float = 60.0,
-) -> http.client.HTTPSConnection | http.client.HTTPConnection:
+) -> http.client.HTTPConnection:
+    """Create and return an already-connected HTTPConnection."""
     ctx = ssl.create_default_context()
     ctx.check_hostname = True
     ctx.verify_mode = ssl.CERT_REQUIRED
 
     if not proxy:
         if scheme == "https":
-            return http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
-        return http.client.HTTPConnection(host, port, timeout=timeout)
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        conn.connect()
+        return conn
 
     p = urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    pscheme = p.scheme.lower()
     phost = p.hostname or ""
-    pport = p.port or (443 if p.scheme == "https" else 80)
+    pport = p.port or (443 if pscheme == "https" else 1080 if pscheme.startswith("socks") else 80)
+    pauth = (p.username, p.password) if p.username else None
 
-    if p.scheme in ("https",):
+    if pscheme in ("socks5", "socks5h", "socks4", "socks4a"):
+        try:
+            import socks as socks_module
+        except ImportError:
+            raise SSOBuildError("SOCKS proxy requires PySocks: pip install pysocks")
+
+        actual_sock = socks_module.socksocket()
+        actual_sock.set_proxy(
+            socks_module.SOCKS5 if pscheme in ("socks5", "socks5h") else socks_module.SOCKS4,
+            phost, pport,
+            username=pauth[0] if pauth else None,
+            password=pauth[1] if pauth else None,
+            rdns=pscheme in ("socks5h", "socks4a"),
+        )
+        actual_sock.settimeout(timeout)
+        actual_sock.connect((host, port))
+
+        if scheme == "https":
+            ssl_sock = ctx.wrap_socket(actual_sock, server_hostname=host)
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+            conn.sock = ssl_sock
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            conn.sock = actual_sock
+        return conn
+
+    if pscheme in ("https",):
         raise SSOBuildError("HTTPS proxy not supported")
-    if p.scheme in ("socks5", "socks5h", "socks4"):
-        raise SSOBuildError("SOCKS proxy not supported")
 
     if scheme == "https":
         conn = http.client.HTTPSConnection(phost, pport, timeout=timeout, context=ctx)
         conn.set_tunnel(host, port)
-        return conn
-
-    return http.client.HTTPConnection(phost, pport, timeout=timeout)
+    else:
+        conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+    conn.connect()
+    return conn
 
 
 class SSOBuildError(RuntimeError):
@@ -178,7 +209,6 @@ def _request(
         conn = _make_connection(host, port, parsed.scheme, proxy=proxy, timeout=timeout)
 
         try:
-            conn.connect()
             conn.putrequest(current_method, path, skip_accept_encoding=False, skip_host=False)
             conn.putheader("Accept", "application/json, text/html;q=0.9, */*;q=0.8")
             conn.putheader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")

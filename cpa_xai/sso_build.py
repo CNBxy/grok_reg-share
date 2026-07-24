@@ -89,7 +89,14 @@ def _make_session(proxy: str | None = None) -> Any:
     except ImportError:
         raise SSOBuildError("curl_cffi is required: pip install curl_cffi>=0.7")
 
-    session = curl_requests.Session(impersonate="chrome126")
+    for c in ["chrome126", "chrome124", "chrome123", "chrome120", "chrome116", "chrome110"]:
+        try:
+            session = curl_requests.Session(impersonate=c)
+            break
+        except Exception:
+            continue
+    else:
+        raise SSOBuildError("no supported impersonation version in curl_cffi")
     session.headers.update({
         "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",

@@ -1036,7 +1036,13 @@ def _grok2api_sso_to_build(sso, email, base_url, mgmt_key, log_callback=None, re
                 if log_callback:
                     log_callback(f"[grok2api] SSO→Build Build 已存在 (HTTP 409): {email}")
                 return True
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                err_body = ""
+                try:
+                    err_body = resp.text[:500]
+                except Exception:
+                    pass
+                raise Exception(f"HTTP Error {resp.status_code}: {err_body}")
             if log_callback:
                 log_callback(f"[+] grok2api SSO→Build 成功: {email}")
             return True
